@@ -15,3 +15,6 @@ contracts/c/build/*
 build/*
 !.gitkeep
 .tmp/
+
+CLAUDE.md
+.claude/
