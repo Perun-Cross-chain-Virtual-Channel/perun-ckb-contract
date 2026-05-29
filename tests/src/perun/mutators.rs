@@ -1,7 +1,10 @@
 use crate::perun;
 use ckb_testtool::ckb_types::prelude::{Pack, Unpack};
 use molecule::prelude::{Builder, Entity};
-use perun_common::perun_types::{Allocation, AnyBalances, AnyBalancesUnion, CKByteDistribution, ChannelState, ETHDistribution, SUDTDistribution};
+use perun_common::perun_types::{
+    Allocation, AnyBalances, AnyBalancesUnion, CKByteDistribution, ChannelState, ETHDistribution,
+    SUDTDistribution,
+};
 
 pub enum Direction {
     AtoB,
@@ -75,7 +78,8 @@ pub fn pay_sudt(
             .build();
 
         let mut sudts_builder = sudts.clone().as_builder();
-        sudts_builder.replace(asset_index, updated_sudt)
+        sudts_builder
+            .replace(asset_index, updated_sudt)
             .expect("valid asset_index");
         let new_sudts = sudts_builder.build();
 
@@ -96,7 +100,9 @@ pub fn pay_eth(
     move |s| {
         let s_bumped = bump_version()(s)?;
         let balances = s_bumped.balances();
-        let eth_rows: Vec<_> = balances.assets().into_iter()
+        let eth_rows: Vec<_> = balances
+            .assets()
+            .into_iter()
             .filter(|r| r.is_eth_row())
             .collect();
         if asset_index >= eth_rows.len() {
@@ -163,15 +169,8 @@ pub fn inflate_ckbytes(
 }
 
 /// regress_version returns a mutator that sets the version to a specific value.
-pub fn set_version(
-    version: u64,
-) -> impl Fn(&ChannelState) -> Result<ChannelState, perun::Error> {
-    move |s| {
-        Ok(s.clone()
-            .as_builder()
-            .version(version.pack())
-            .build())
-    }
+pub fn set_version(version: u64) -> impl Fn(&ChannelState) -> Result<ChannelState, perun::Error> {
+    move |s| Ok(s.clone().as_builder().version(version.pack()).build())
 }
 
 /// get_indices returns (sender_index, receiver_index)

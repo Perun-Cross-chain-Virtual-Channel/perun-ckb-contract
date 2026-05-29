@@ -20,7 +20,7 @@ use ckb_std::{
 /// **Main entry point for contract**
 pub fn program_entry() -> i8 {
     match main() {
-        Ok(_) => 0,   // Success
+        Ok(_) => 0,         // Success
         Err(e) => e.into(), // Failure
     }
 }
