@@ -28,16 +28,17 @@ use ckb_std::{
 };
 use perun_common::{
     channels::{
-        find_cell_by_type_hash, get_channel_action, unpack_byte32, unpack_u64,
-        verify_channel_id_cross_integrity, verify_equal_sum_of_balances, verify_max_one_channel,
+        find_cell_by_type_hash, get_channel_action, is_coordinated_eligible,
+        is_coordinator_configured, unpack_byte32, unpack_u64, verify_channel_id_cross_integrity,
+        verify_coordinator_sig, verify_equal_sum_of_balances, verify_max_one_channel,
         verify_thread_token_integrity, verify_time_lock_expired, verify_valid_state_sigs,
         verify_version_number, PChannelAction,
     },
     error::Error,
     perun_types::{
         Balances, ChannelConstants, ChannelParameters, ChannelState, ChannelStatus, ChannelWitness,
-        ChannelWitnessUnion, Dispute, IndexMap, ParentsVec, SubAlloc, VCChannelConstants,
-        VirtualChannelStatus,
+        ChannelWitnessUnion, Coordinate, Dispute, IndexMap, ParentsVec, SubAlloc,
+        VCChannelConstants, VirtualChannelStatus,
     },
 };
 
@@ -170,6 +171,12 @@ pub fn check_valid_start(
     // We verify that the channel status is not disputed upon start.
     verify_status_not_disputed(new_status)?;
     debug!("verify_status_not_disputed passed");
+
+    // A fresh channel must not start in the coordinated phase. `coordinated` may
+    // only become true through a Coordinate transaction (which verifies the
+    // coordinator's signature); enforcing it here prevents bypassing coordination.
+    verify_status_not_coordinated(new_status)?;
+    debug!("verify_status_not_coordinated passed");
     Ok(())
 }
 
@@ -225,6 +232,10 @@ pub fn check_valid_progress(
             verify_status_not_disputed(new_status)?;
             debug!("verify_status_not_disputed passed");
 
+            // Funding may not enter the coordinated phase.
+            verify_status_not_coordinated(new_status)?;
+            debug!("verify_status_not_coordinated passed");
+
             // We check that the funded bit in the channel status is set to true, iff the funding is complete.
             verify_funded_status(&new_status, false)?;
             debug!("verify_funded_status passed");
@@ -245,11 +256,137 @@ pub fn check_valid_progress(
             )?;
             check_vc_dispute(old_status, new_status)
         }
+        // Coordinate progresses a disputed multi-ledger channel into the
+        // coordinated phase (the channel cell continues with the coordinator-
+        // certified canonical state).
+        ChannelWitnessUnion::Coordinate(c) => {
+            debug!("ChannelWitnessUnion::Coordinate");
+            check_valid_coordinate(old_status, new_status, &c, channel_constants)
+        }
         // Close, ForceClose and Abort may not happen as channel progression (if there is a continuing channel output).
         ChannelWitnessUnion::Close(_) => Err(Error::ChannelCloseWithChannelOutput),
         ChannelWitnessUnion::ForceClose(_) => Err(Error::ChannelForceCloseWithChannelOutput),
         ChannelWitnessUnion::Abort(_) => Err(Error::ChannelAbortWithChannelOutput),
     }
+}
+
+/// check_valid_coordinate validates the coordinated-settlement phase transition for a
+/// multi-ledger channel. After the dispute window has passed, the coordinator certifies a
+/// single canonical (highest-version) state across all chains; this transitions the channel
+/// from the DISPUTE phase into the COORDINATED phase. ForceClose of an eligible channel is
+/// then gated on this `coordinated` flag (see check_normal_force_close / check_vc_force_close),
+/// mirroring the Ethereum Adjudicator's `coordinate()` -> `conclude()` flow.
+pub fn check_valid_coordinate(
+    old_status: &ChannelStatus,
+    new_status: &ChannelStatus,
+    c: &Coordinate,
+    channel_constants: &ChannelConstants,
+) -> Result<(), Error> {
+    debug!("check_valid_coordinate");
+    let params = channel_constants.params();
+
+    // Coordinate only applies to channels that require coordinated settlement
+    // (a coordinator is configured AND the state spans more than one ledger).
+    if !is_coordinated_eligible(&params, &c.state()) {
+        return Err(Error::CoordinateNotEligible);
+    }
+    debug!("is_coordinated_eligible passed");
+
+    // The channel must be funded and in the DISPUTE phase with the refutation
+    // window already expired (mirrors coordinateSingle's `block.timestamp >= timeout`).
+    verify_status_funded(old_status)?;
+    verify_status_disputed(old_status)?;
+    verify_time_lock_expired(params.challenge_duration().unpack())?;
+    debug!("verify_time_lock_expired passed");
+
+    // Canonical-state integrity: same channel id, non-decreasing version, equal
+    // balance sum (mirrors coordinateSingle's `state.version >= dispute.version`).
+    verify_equal_channel_id(&old_status.state(), &c.state())?;
+    let old_version: u64 = old_status.state().version().unpack();
+    let new_version: u64 = c.state().version().unpack();
+    if new_version < old_version {
+        return Err(Error::CoordinateVersionRegression);
+    }
+    verify_equal_sum_of_balances(&old_status.state().balances(), &c.state().balances())?;
+
+    // Both participants and the coordinator must have signed the canonical state.
+    verify_valid_state_sigs(
+        &c.sig_a().unpack(),
+        &c.sig_b().unpack(),
+        &c.state(),
+        &params.party_a().pub_key(),
+        &params.party_b().pub_key(),
+    )?;
+    debug!("participant sigs verified");
+    let coord_pub_key = params
+        .coordinator()
+        .to_opt()
+        .ok_or(Error::CoordinateNotEligible)?;
+    verify_coordinator_sig(&c.coord_sig().unpack(), &c.state(), &coord_pub_key)?;
+    debug!("coordinator sig verified");
+
+    // The new status equals the old one with the state replaced by the canonical
+    // state and `coordinated` set to true; `disputed` stays true.
+    verify_coordinated_status_transition(old_status, new_status, &c.state())?;
+
+    // Recursive coordination: if this ledger channel is a virtual-channel parent
+    // (funds locked for a VC), a virtual channel that HAS a coordinator is
+    // coordinated together with its parent in this same transaction (mirroring
+    // the Ethereum Adjudicator's coordinateRecursive sub-channel handling): the
+    // VC cell is present as an output, must have entered the coordinated phase,
+    // and its balances must match the parent's locked sub-allocation.
+    //
+    // A virtual channel WITHOUT a coordinator cannot be certified and is not
+    // bundled here; it is settled via its own refutation-window time lock at
+    // force-close instead (see check_vc_force_close). A missing VC output is
+    // therefore allowed — the locked-funds consistency for that case was
+    // established at dispute time and is re-checked at force-close
+    // (verify_all_paid_vc). The force-close gate still requires THIS ledger
+    // channel to be coordinated, so settlement remains protected.
+    if old_status.vc_disputed().to_bool() {
+        let vcts_hash = new_status.vcts_hash().unpack();
+        if let Some(out_vc_idx) = find_cell_by_type_hash(&vcts_hash, Source::Output)? {
+            let vc_status = VirtualChannelStatus::from_slice(
+                load_cell_data(out_vc_idx, Source::Output)?.as_slice(),
+            )?;
+            if !vc_status.coordinated().to_bool() {
+                return Err(Error::CoordinatedSettlementRequired);
+            }
+            verify_locked_funds(new_status, &vc_status)?;
+            debug!("recursive vc coordinate cross-check passed");
+        } else {
+            debug!("vc not bundled in coordinate; settled separately at force-close");
+        }
+    }
+
+    debug!("check_valid_coordinate passed");
+    Ok(())
+}
+
+fn verify_coordinated_status_transition(
+    old_status: &ChannelStatus,
+    new_status: &ChannelStatus,
+    canonical_state: &ChannelState,
+) -> Result<(), Error> {
+    if new_status.state().as_slice()[..] != canonical_state.as_slice()[..] {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if new_status.funded().as_slice()[..] != old_status.funded().as_slice()[..] {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if !new_status.disputed().to_bool() {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if !new_status.coordinated().to_bool() {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if new_status.vc_disputed().as_slice()[..] != old_status.vc_disputed().as_slice()[..] {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if new_status.vcts_hash().as_slice()[..] != old_status.vcts_hash().as_slice()[..] {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    Ok(())
 }
 
 //VC-Start-Tx for PCTS
@@ -326,6 +463,13 @@ pub fn check_normal_dispute(
     // One cannot dispute if funding is not complete.
     verify_status_funded(old_status)?;
     debug!("verify_status_funded passed");
+
+    // A channel that has already been coordinated may not be re-disputed, and a
+    // dispute may not set the coordinated flag. `coordinated` may only become true
+    // via a Coordinate transaction; this prevents bypassing or reverting coordination.
+    verify_status_not_coordinated(old_status)?;
+    verify_status_not_coordinated(new_status)?;
+    debug!("verify_status_not_coordinated passed");
 
     // The disputed flag in the new status must be set. This indicates that the channel can be closed
     // forcibly after the expiration of the challenge duration in a later transaction.
@@ -453,6 +597,9 @@ pub fn check_valid_close(
         ChannelWitnessUnion::Fund(_) => Err(Error::ChannelFundWithoutChannelOutput),
         ChannelWitnessUnion::Dispute(_) => Err(Error::ChannelDisputeWithoutChannelOutput),
         ChannelWitnessUnion::VCDispute(_) => Err(Error::VCDisputeWithoutChannelOutput),
+        // Coordinate is a progression (it keeps the channel cell), so it may not
+        // appear in a closing transaction that consumes the channel cell.
+        ChannelWitnessUnion::Coordinate(_) => Err(Error::CoordinateStatusInvalid),
     }
 }
 
@@ -511,14 +658,34 @@ pub fn check_vc_force_close(
     //perform closing checks for ledger channel
     verify_status_funded(old_status)?;
     debug!("verify_status_funded(lc) passed");
-    verify_time_lock_expired(channel_constants.params().challenge_duration().unpack())?;
-    debug!("verify_time_lock_expired(lc) passed");
     verify_status_disputed(old_status)?;
     debug!("verify_status_disputed(lc) passed");
 
-    //perform checks for child vc
-    verify_time_lock_expired(vcts_args.params().challenge_duration().unpack())?;
-    debug!("verify_time_lock_expired(vc) passed");
+    // The ledger channel and the virtual channel are settled independently. A
+    // leg that requires coordinated settlement (a coordinator is configured for
+    // it) must have reached the coordinated phase before force closing; a leg
+    // without a coordinator falls back to its own challenge-duration time lock.
+    // Decoupling the two legs lets a virtual channel that has NO coordinator be
+    // settled (via its time lock) inside a coordinated cross-chain ledger
+    // channel, instead of being permanently stranded by a flag it can never set.
+    if is_coordinated_eligible(&channel_constants.params(), &old_status.state()) {
+        if !old_status.coordinated().to_bool() {
+            return Err(Error::CoordinatedSettlementRequired);
+        }
+        debug!("coordinated gate (lc) passed");
+    } else {
+        verify_time_lock_expired(channel_constants.params().challenge_duration().unpack())?;
+        debug!("verify_time_lock_expired(lc) passed");
+    }
+    if is_coordinator_configured(&vcts_args.params()) {
+        if !vc_status.coordinated().to_bool() {
+            return Err(Error::CoordinatedSettlementRequired);
+        }
+        debug!("coordinated gate (vc) passed");
+    } else {
+        verify_time_lock_expired(vcts_args.params().challenge_duration().unpack())?;
+        debug!("verify_time_lock_expired(vc) passed");
+    }
 
     //check that the funds are payed out correctly
     verify_all_paid_vc(
@@ -545,10 +712,24 @@ pub fn check_normal_force_close(
     debug!("verify_no_locked_funds passed");
     verify_status_funded(old_status)?;
     debug!("verify_status_funded passed");
-    verify_time_lock_expired(channel_constants.params().challenge_duration().unpack())?;
-    debug!("verify_time_lock_expired passed");
     verify_status_disputed(old_status)?;
     debug!("verify_status_disputed passed");
+
+    // Multi-ledger channels with a coordinator must first reach the coordinated
+    // phase (a coordinator-certified canonical state across chains) before force
+    // closing, mirroring concludeSingle's "coordinated settlement required".
+    // Single-ledger / coordinator-less channels follow the original timelock path.
+    let params = channel_constants.params();
+    if is_coordinated_eligible(&params, &old_status.state()) {
+        if !old_status.coordinated().to_bool() {
+            return Err(Error::CoordinatedSettlementRequired);
+        }
+        // The refutation window was already enforced during the Coordinate tx.
+        debug!("coordinated gate passed");
+    } else {
+        verify_time_lock_expired(params.challenge_duration().unpack())?;
+        debug!("verify_time_lock_expired passed");
+    }
 
     // Check if this is a case where vc cell is being closed
     verify_all_paid(
@@ -1019,6 +1200,17 @@ pub fn verify_valid_lock_script(channel_constants: &ChannelConstants) -> Result<
 pub fn verify_status_not_disputed(status: &ChannelStatus) -> Result<(), Error> {
     if status.disputed().to_bool() {
         return Err(Error::StatusDisputed);
+    }
+    Ok(())
+}
+
+/// The coordinated phase may only be entered through a Coordinate transaction
+/// (which verifies the coordinator's signature). Every other transition (start,
+/// fund, dispute) must keep `coordinated` false, otherwise coordinated settlement
+/// could be bypassed by forging the flag.
+pub fn verify_status_not_coordinated(status: &ChannelStatus) -> Result<(), Error> {
+    if status.coordinated().to_bool() {
+        return Err(Error::CoordinateStatusInvalid);
     }
     Ok(())
 }

@@ -20,20 +20,20 @@ use ckb_std::{
 
 use perun_common::{
     channels::{
-        find_cell_by_type_hash, unpack_byte32, verify_equal_sum_of_balances,
-        verify_valid_state_sigs, VChannelAction,
+        find_cell_by_type_hash, is_coordinator_configured, unpack_byte32, verify_coordinator_sig,
+        verify_equal_sum_of_balances, verify_time_lock_expired, verify_valid_state_sigs,
+        VChannelAction,
     },
     error::Error,
     perun_types::{
-        ChannelParameters, ChannelStatus, ChannelWitness,
-        ChannelWitnessUnion, Participant, VCChannelConstants,
-        VirtualChannelStatus,
+        ChannelParameters, ChannelState, ChannelStatus, ChannelWitness, ChannelWitnessUnion,
+        Participant, VCChannelConstants, VirtualChannelStatus,
     },
 };
 
 pub fn program_entry() -> i8 {
     match main() {
-        Ok(_) => 0,   // Success
+        Ok(_) => 0,         // Success
         Err(e) => e.into(), // Failure
     }
 }
@@ -101,6 +101,14 @@ pub fn main() -> Result<(), Error> {
             debug!("Close2 Tx detected");
             check_valid_close2(&input_lc_status, &input_vc_status, &channel_constants)
         }
+
+        VChannelAction::Coordinate {
+            old_status,
+            new_status,
+        } => {
+            debug!("Coordinate Tx detected");
+            check_valid_vc_coordinate(&old_status, &new_status, &channel_constants)
+        }
     }
 }
 
@@ -123,6 +131,9 @@ pub fn check_valid_vc_start(
 
     //verify that FirstForceCloseFlag is not set
     verify_first_forced_closed_flag_not_set(&new_vc_status)?;
+
+    //verify that the vc does not start in the coordinated phase
+    verify_vc_not_coordinated(&new_vc_status)?;
 
     //verify that the lock script is always success lock-script
     verify_always_success_lock_script(vc_channel_constants)?;
@@ -168,6 +179,12 @@ pub fn check_valid_vc_progress(
 
     verify_first_forced_closed_flag_not_set(new_vc_status)?;
     debug!("verify_first_forced_closed_flag_not_set passed");
+
+    // A coordinated virtual channel may only be closed, not progressed, and a
+    // progress may not set the coordinated flag (it is only set via Coordinate).
+    verify_vc_not_coordinated(old_vc_status)?;
+    verify_vc_not_coordinated(new_vc_status)?;
+    debug!("verify_vc_not_coordinated passed");
 
     verify_non_decreasing_version_number_vc(old_vc_status, new_vc_status)?;
     debug!("verify_non_decreasing_version_number_vc passed");
@@ -238,7 +255,7 @@ pub fn check_valid_vc_merge(
 pub fn check_valid_close1(
     input_vc_status: &VirtualChannelStatus,
     output_vc_status: &VirtualChannelStatus,
-    _: &VCChannelConstants,
+    vc_constants: &VCChannelConstants,
 ) -> Result<(), Error> {
     debug!("check_valid_close1");
     // a parent pcts must appear as input
@@ -249,6 +266,19 @@ pub fn check_valid_close1(
     // parent lc cell is in forceClose Operation
     verify_parent_in_force_close(parent_input_idx)?;
     debug!("verify_parent_in_force_close passed");
+
+    // A virtual channel that has a coordinator must have been moved into the
+    // coordinated phase before it can be force-closed (its parent coordinates it
+    // recursively — see check_valid_vc_coordinate). A virtual channel WITHOUT a
+    // coordinator cannot be coordinated and is settled via its own time lock,
+    // which the parent enforces in check_vc_force_close. Gating on
+    // `is_coordinator_configured` (rather than full multi-ledger eligibility)
+    // keeps this consistent with the parent gate and with the coordinate path,
+    // which also accepts single-asset virtual channels that carry a coordinator.
+    if is_coordinator_configured(&vc_constants.params()) && !input_vc_status.coordinated().to_bool()
+    {
+        return Err(Error::CoordinatedSettlementRequired);
+    }
 
     //first force close flag is set in output vc cell
     verify_first_forced_closed_flag_set(output_vc_status)?;
@@ -320,7 +350,10 @@ pub fn verify_vc_rent_payout_close2(owner: &Participant) -> Result<(), Error> {
     Ok(())
 }
 
-pub fn verify_vc_rent_payout_merge(owner: &Participant, discarded_input_idx: usize) -> Result<(), Error> {
+pub fn verify_vc_rent_payout_merge(
+    owner: &Participant,
+    discarded_input_idx: usize,
+) -> Result<(), Error> {
     let owner_lock_hash: [u8; 32] = owner.payment_script_hash().unpack();
     let vc_cell_capacity = load_cell_capacity(discarded_input_idx, Source::GroupInput)?;
 
@@ -388,6 +421,16 @@ pub fn verify_first_forced_closed_flag_not_set(
 ) -> Result<(), Error> {
     if vc_status.first_force_close().to_bool() {
         return Err(Error::FirstForceCloseFlagSet);
+    }
+    Ok(())
+}
+
+/// The coordinated phase may only be entered through a Coordinate transaction.
+/// Start and progress must keep `coordinated` false so coordinated settlement
+/// cannot be bypassed by forging the flag.
+pub fn verify_vc_not_coordinated(vc_status: &VirtualChannelStatus) -> Result<(), Error> {
+    if vc_status.coordinated().to_bool() {
+        return Err(Error::CoordinateStatusInvalid);
     }
     Ok(())
 }
@@ -494,6 +537,137 @@ pub fn verify_parent_in_force_close(parent_input_idx: usize) -> Result<(), Error
         ChannelWitnessUnion::ForceClose(_) => Ok(()),
         _ => Err(Error::ParentNotInForceClose),
     }
+}
+
+pub fn verify_parent_in_coordinate(parent_input_idx: usize) -> Result<(), Error> {
+    let witnes_args = load_witness_args(parent_input_idx, Source::Input)?;
+    let witness_bytes: Bytes = witnes_args
+        .input_type()
+        .to_opt()
+        .ok_or(Error::NoWitness)?
+        .unpack();
+    let parent_witness = ChannelWitness::from_slice(&witness_bytes)?;
+
+    match parent_witness.to_enum() {
+        ChannelWitnessUnion::Coordinate(_) => Ok(()),
+        _ => Err(Error::ParentNotInCoordinate),
+    }
+}
+
+/// check_valid_vc_coordinate validates the virtual-channel half of a recursive Coordinate
+/// transaction. The parent ledger channel must be coordinating in the same tx; this VC cell
+/// carries its own `Coordinate` witness with the canonical VC state plus participant and
+/// coordinator signatures. On success the VC cell continues with `coordinated` set to true.
+pub fn check_valid_vc_coordinate(
+    old_vc_status: &VirtualChannelStatus,
+    new_vc_status: &VirtualChannelStatus,
+    vc_constants: &VCChannelConstants,
+) -> Result<(), Error> {
+    debug!("check_valid_vc_coordinate");
+
+    // The parent ledger channel must be coordinating in the same transaction.
+    let parent_input_idx = get_parent_of_vc(old_vc_status, Source::Input)?;
+    verify_parent_in_coordinate(parent_input_idx)?;
+    debug!("verify_parent_in_coordinate passed");
+
+    // Load this VC cell's Coordinate witness: canonical VC state + signatures.
+    let witness_args = load_witness_args(0, Source::GroupInput)?;
+    let witness_bytes: Bytes = witness_args
+        .input_type()
+        .to_opt()
+        .ok_or(Error::NoWitness)?
+        .unpack();
+    let witness = ChannelWitness::from_slice(&witness_bytes)?;
+    let coord = match witness.to_enum() {
+        ChannelWitnessUnion::Coordinate(c) => c,
+        _ => return Err(Error::InvalidVCTx),
+    };
+
+    let vc_params = vc_constants.params();
+    // Coordination of a virtual channel is driven by its parent ledger channel:
+    // verify_parent_in_coordinate already established that the parent is a
+    // coordinating (coordinated-eligible, i.e. multi-ledger) channel. The VC need
+    // only carry a coordinator key so its canonical state can be certified — it
+    // need NOT itself be multi-ledger. A single-asset virtual channel nested in a
+    // cross-chain ledger channel must still be coordinatable; requiring the VC to
+    // be multi-ledger here would strand it (it could never reach `coordinated`,
+    // yet the parent's force-close gate requires it), permanently locking funds.
+    if !is_coordinator_configured(&vc_params) {
+        return Err(Error::CoordinateNotEligible);
+    }
+
+    // The virtual channel's own refutation window must have expired before it
+    // enters the coordinated phase, mirroring Ethereum's per-channel timeout
+    // check on the coordinated path. The parent enforces its own (possibly
+    // different) window in check_valid_coordinate; the VC window is enforced here
+    // because it is enforced nowhere else on the coordinated force-close path. A
+    // VC shared by two parents is coordinated once per parent — the window was
+    // already enforced on the first coordinate, so only check the first (not yet
+    // coordinated) transition.
+    if !old_vc_status.coordinated().to_bool() {
+        verify_time_lock_expired(vc_params.challenge_duration().unpack())?;
+    }
+
+    // Canonical-state integrity: same channel id, non-decreasing version, equal balance sum.
+    let old_id: [u8; 32] = old_vc_status.vcstate().channel_id().unpack();
+    let new_id: [u8; 32] = coord.state().channel_id().unpack();
+    if old_id[..] != new_id[..] {
+        return Err(Error::ChannelIdMismatch);
+    }
+    let old_version: u64 = old_vc_status.vcstate().version().unpack();
+    let new_version: u64 = coord.state().version().unpack();
+    if new_version < old_version {
+        return Err(Error::CoordinateVersionRegression);
+    }
+    verify_equal_sum_of_balances(
+        &old_vc_status.vcstate().balances(),
+        &coord.state().balances(),
+    )?;
+
+    // Participant and coordinator signatures on the canonical VC state.
+    verify_valid_state_sigs(
+        &coord.sig_a().unpack(),
+        &coord.sig_b().unpack(),
+        &coord.state(),
+        &vc_params.party_a().pub_key(),
+        &vc_params.party_b().pub_key(),
+    )?;
+    let coord_pub_key = vc_params
+        .coordinator()
+        .to_opt()
+        .ok_or(Error::CoordinateNotEligible)?;
+    verify_coordinator_sig(&coord.coord_sig().unpack(), &coord.state(), &coord_pub_key)?;
+    debug!("vc participant + coordinator sigs verified");
+
+    // The new VC status equals the old one with vcstate replaced by the canonical state and
+    // `coordinated` set to true; parents, owner, and first_force_close are unchanged.
+    verify_vc_coordinated_transition(old_vc_status, new_vc_status, &coord.state())?;
+    debug!("check_valid_vc_coordinate passed");
+    Ok(())
+}
+
+fn verify_vc_coordinated_transition(
+    old_vc_status: &VirtualChannelStatus,
+    new_vc_status: &VirtualChannelStatus,
+    canonical_state: &ChannelState,
+) -> Result<(), Error> {
+    if new_vc_status.vcstate().as_slice() != canonical_state.as_slice() {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if new_vc_status.parents().as_slice() != old_vc_status.parents().as_slice() {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if new_vc_status.owner().as_slice() != old_vc_status.owner().as_slice() {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if new_vc_status.first_force_close().as_slice() != old_vc_status.first_force_close().as_slice()
+    {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    if !new_vc_status.coordinated().to_bool() {
+        return Err(Error::CoordinateStatusInvalid);
+    }
+    Ok(())
 }
 
 //checks that only one (and the same) parent ledger channel cell exists in inputs and outputs
@@ -684,6 +858,13 @@ pub fn get_vchannel_action() -> Result<VChannelAction, Error> {
                 return Ok(VChannelAction::Close1 {
                     input_vc_status: input_vc_status,
                     output_vc_status: output_vc_status,
+                });
+            }
+            //MODE: VC Coordinate (recursive with parent ledger channel)
+            ChannelWitnessUnion::Coordinate(_) => {
+                return Ok(VChannelAction::Coordinate {
+                    old_status: input_vc_status,
+                    new_status: output_vc_status,
                 });
             }
             _ => return Err(Error::InvalidVCTx),
