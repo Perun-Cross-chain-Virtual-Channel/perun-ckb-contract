@@ -129,6 +129,13 @@ pub enum Error {
     InvalidVCRentPayoutCell,
     LedgerChannelHasLockedFunds,
     InvalidDummyEntry,
+    // Coordinated-settlement (cross-chain) errors
+    CoordinateNotEligible,
+    CoordinatedSettlementRequired,
+    InvalidCoordinatorSignature,
+    CoordinateVersionRegression,
+    CoordinateStatusInvalid,
+    ParentNotInCoordinate,
 }
 impl From<Error> for i8 {
     #[inline]

@@ -2207,9 +2207,7 @@ impl SUDTAllocationBuilder {
         self
     }
     pub fn extend<T: ::core::iter::IntoIterator<Item = SUDTBalances>>(mut self, iter: T) -> Self {
-        for elem in iter {
-            self.0.push(elem);
-        }
+        self.0.extend(iter);
         self
     }
     pub fn replace(&mut self, index: usize, v: SUDTBalances) -> Option<SUDTBalances> {
@@ -2312,9 +2310,22 @@ impl<'t: 'r, 'r> ::core::iter::ExactSizeIterator for SUDTAllocationReaderIterato
         self.2 - self.1
     }
 }
-impl ::core::iter::FromIterator<SUDTBalances> for SUDTAllocation {
-    fn from_iter<T: IntoIterator<Item = SUDTBalances>>(iter: T) -> Self {
-        Self::new_builder().extend(iter).build()
+impl<T> ::core::iter::FromIterator<T> for SUDTAllocation
+where
+    T: Into<SUDTBalances>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new_builder()
+            .extend(iter.into_iter().map(Into::into))
+            .build()
+    }
+}
+impl<T> From<Vec<T>> for SUDTAllocation
+where
+    T: Into<SUDTBalances>,
+{
+    fn from(v: Vec<T>) -> Self {
+        v.into_iter().collect()
     }
 }
 #[derive(Clone)]
@@ -2552,9 +2563,7 @@ impl LockedBalancesBuilder {
         self
     }
     pub fn extend<T: ::core::iter::IntoIterator<Item = SubAlloc>>(mut self, iter: T) -> Self {
-        for elem in iter {
-            self.0.push(elem);
-        }
+        self.0.extend(iter);
         self
     }
     pub fn replace(&mut self, index: usize, v: SubAlloc) -> Option<SubAlloc> {
@@ -2657,9 +2666,22 @@ impl<'t: 'r, 'r> ::core::iter::ExactSizeIterator for LockedBalancesReaderIterato
         self.2 - self.1
     }
 }
-impl ::core::iter::FromIterator<SubAlloc> for LockedBalances {
-    fn from_iter<T: IntoIterator<Item = SubAlloc>>(iter: T) -> Self {
-        Self::new_builder().extend(iter).build()
+impl<T> ::core::iter::FromIterator<T> for LockedBalances
+where
+    T: Into<SubAlloc>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new_builder()
+            .extend(iter.into_iter().map(Into::into))
+            .build()
+    }
+}
+impl<T> From<Vec<T>> for LockedBalances
+where
+    T: Into<SubAlloc>,
+{
+    fn from(v: Vec<T>) -> Self {
+        v.into_iter().collect()
     }
 }
 #[derive(Clone)]
@@ -3238,9 +3260,7 @@ impl AllocationBuilder {
         self
     }
     pub fn extend<T: ::core::iter::IntoIterator<Item = AnyBalances>>(mut self, iter: T) -> Self {
-        for elem in iter {
-            self.0.push(elem);
-        }
+        self.0.extend(iter);
         self
     }
     pub fn replace(&mut self, index: usize, v: AnyBalances) -> Option<AnyBalances> {
@@ -3343,9 +3363,22 @@ impl<'t: 'r, 'r> ::core::iter::ExactSizeIterator for AllocationReaderIterator<'t
         self.2 - self.1
     }
 }
-impl ::core::iter::FromIterator<AnyBalances> for Allocation {
-    fn from_iter<T: IntoIterator<Item = AnyBalances>>(iter: T) -> Self {
-        Self::new_builder().extend(iter).build()
+impl<T> ::core::iter::FromIterator<T> for Allocation
+where
+    T: Into<AnyBalances>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new_builder()
+            .extend(iter.into_iter().map(Into::into))
+            .build()
+    }
+}
+impl<T> From<Vec<T>> for Allocation
+where
+    T: Into<AnyBalances>,
+{
+    fn from(v: Vec<T>) -> Self {
+        v.into_iter().collect()
     }
 }
 #[derive(Clone)]
@@ -3828,9 +3861,7 @@ impl SubBalancesBuilder {
         self
     }
     pub fn extend<T: ::core::iter::IntoIterator<Item = Uint128>>(mut self, iter: T) -> Self {
-        for elem in iter {
-            self.0.push(elem);
-        }
+        self.0.extend(iter);
         self
     }
     pub fn replace(&mut self, index: usize, v: Uint128) -> Option<Uint128> {
@@ -3908,9 +3939,22 @@ impl<'t: 'r, 'r> ::core::iter::ExactSizeIterator for SubBalancesReaderIterator<'
         self.2 - self.1
     }
 }
-impl ::core::iter::FromIterator<Uint128> for SubBalances {
-    fn from_iter<T: IntoIterator<Item = Uint128>>(iter: T) -> Self {
-        Self::new_builder().extend(iter).build()
+impl<T> ::core::iter::FromIterator<T> for SubBalances
+where
+    T: Into<Uint128>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new_builder()
+            .extend(iter.into_iter().map(Into::into))
+            .build()
+    }
+}
+impl<T> From<Vec<T>> for SubBalances
+where
+    T: Into<Uint128>,
+{
+    fn from(v: Vec<T>) -> Self {
+        v.into_iter().collect()
     }
 }
 #[derive(Clone)]
@@ -6563,6 +6607,175 @@ impl From<Bytes> for App {
     }
 }
 #[derive(Clone)]
+pub struct Coordinator(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for Coordinator {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for Coordinator {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for Coordinator {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        if let Some(v) = self.to_opt() {
+            write!(f, "{}(Some({}))", Self::NAME, v)
+        } else {
+            write!(f, "{}(None)", Self::NAME)
+        }
+    }
+}
+impl ::core::default::Default for Coordinator {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        Coordinator::new_unchecked(v)
+    }
+}
+impl Coordinator {
+    const DEFAULT_VALUE: [u8; 0] = [];
+    pub fn is_none(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn is_some(&self) -> bool {
+        !self.0.is_empty()
+    }
+    pub fn to_opt(&self) -> Option<SEC1EncodedPubKey> {
+        if self.is_none() {
+            None
+        } else {
+            Some(SEC1EncodedPubKey::new_unchecked(self.0.clone()))
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> CoordinatorReader<'r> {
+        CoordinatorReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for Coordinator {
+    type Builder = CoordinatorBuilder;
+    const NAME: &'static str = "Coordinator";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        Coordinator(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        CoordinatorReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        CoordinatorReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder().set(self.to_opt())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct CoordinatorReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for CoordinatorReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for CoordinatorReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for CoordinatorReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        if let Some(v) = self.to_opt() {
+            write!(f, "{}(Some({}))", Self::NAME, v)
+        } else {
+            write!(f, "{}(None)", Self::NAME)
+        }
+    }
+}
+impl<'r> CoordinatorReader<'r> {
+    pub fn is_none(&self) -> bool {
+        self.0.is_empty()
+    }
+    pub fn is_some(&self) -> bool {
+        !self.0.is_empty()
+    }
+    pub fn to_opt(&self) -> Option<SEC1EncodedPubKeyReader<'r>> {
+        if self.is_none() {
+            None
+        } else {
+            Some(SEC1EncodedPubKeyReader::new_unchecked(self.as_slice()))
+        }
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for CoordinatorReader<'r> {
+    type Entity = Coordinator;
+    const NAME: &'static str = "CoordinatorReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        CoordinatorReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
+        if !slice.is_empty() {
+            SEC1EncodedPubKeyReader::verify(&slice[..], compatible)?;
+        }
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct CoordinatorBuilder(pub(crate) Option<SEC1EncodedPubKey>);
+impl CoordinatorBuilder {
+    pub fn set(mut self, v: Option<SEC1EncodedPubKey>) -> Self {
+        self.0 = v;
+        self
+    }
+}
+impl molecule::prelude::Builder for CoordinatorBuilder {
+    type Entity = Coordinator;
+    const NAME: &'static str = "CoordinatorBuilder";
+    fn expected_length(&self) -> usize {
+        self.0
+            .as_ref()
+            .map(|ref inner| inner.as_slice().len())
+            .unwrap_or(0)
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        self.0
+            .as_ref()
+            .map(|ref inner| writer.write_all(inner.as_slice()))
+            .unwrap_or(Ok(()))
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        Coordinator::new_unchecked(inner.into())
+    }
+}
+impl From<SEC1EncodedPubKey> for Coordinator {
+    fn from(value: SEC1EncodedPubKey) -> Self {
+        Self::new_builder().set(Some(value)).build()
+    }
+}
+#[derive(Clone)]
 pub struct Participant(molecule::bytes::Bytes);
 impl ::core::fmt::LowerHex for Participant {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -6944,6 +7157,7 @@ impl ::core::fmt::Display for ChannelParameters {
             "is_virtual_channel",
             self.is_virtual_channel()
         )?;
+        write!(f, ", {}: {}", "coordinator", self.coordinator())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
             write!(f, ", .. ({} fields)", extra_count)?;
@@ -6958,21 +7172,21 @@ impl ::core::default::Default for ChannelParameters {
     }
 }
 impl ChannelParameters {
-    const DEFAULT_VALUE: [u8; 332] = [
-        76, 1, 0, 0, 32, 0, 0, 0, 157, 0, 0, 0, 26, 1, 0, 0, 58, 1, 0, 0, 66, 1, 0, 0, 66, 1, 0, 0,
-        71, 1, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 336] = [
+        80, 1, 0, 0, 36, 0, 0, 0, 161, 0, 0, 0, 30, 1, 0, 0, 62, 1, 0, 0, 70, 1, 0, 0, 70, 1, 0, 0,
+        75, 1, 0, 0, 80, 1, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0,
+        0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const FIELD_COUNT: usize = 7;
+    pub const FIELD_COUNT: usize = 8;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -7028,11 +7242,17 @@ impl ChannelParameters {
     pub fn is_virtual_channel(&self) -> Bool {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[28..]) as usize;
+        let end = molecule::unpack_number(&slice[32..]) as usize;
+        Bool::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn coordinator(&self) -> Coordinator {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[32..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[32..]) as usize;
-            Bool::new_unchecked(self.0.slice(start..end))
+            let end = molecule::unpack_number(&slice[36..]) as usize;
+            Coordinator::new_unchecked(self.0.slice(start..end))
         } else {
-            Bool::new_unchecked(self.0.slice(start..))
+            Coordinator::new_unchecked(self.0.slice(start..))
         }
     }
     pub fn as_reader<'r>(&'r self) -> ChannelParametersReader<'r> {
@@ -7069,6 +7289,7 @@ impl molecule::prelude::Entity for ChannelParameters {
             .app(self.app())
             .is_ledger_channel(self.is_ledger_channel())
             .is_virtual_channel(self.is_virtual_channel())
+            .coordinator(self.coordinator())
     }
 }
 #[derive(Clone, Copy)]
@@ -7107,6 +7328,7 @@ impl<'r> ::core::fmt::Display for ChannelParametersReader<'r> {
             "is_virtual_channel",
             self.is_virtual_channel()
         )?;
+        write!(f, ", {}: {}", "coordinator", self.coordinator())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
             write!(f, ", .. ({} fields)", extra_count)?;
@@ -7115,7 +7337,7 @@ impl<'r> ::core::fmt::Display for ChannelParametersReader<'r> {
     }
 }
 impl<'r> ChannelParametersReader<'r> {
-    pub const FIELD_COUNT: usize = 7;
+    pub const FIELD_COUNT: usize = 8;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -7171,11 +7393,17 @@ impl<'r> ChannelParametersReader<'r> {
     pub fn is_virtual_channel(&self) -> BoolReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[28..]) as usize;
+        let end = molecule::unpack_number(&slice[32..]) as usize;
+        BoolReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn coordinator(&self) -> CoordinatorReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[32..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[32..]) as usize;
-            BoolReader::new_unchecked(&self.as_slice()[start..end])
+            let end = molecule::unpack_number(&slice[36..]) as usize;
+            CoordinatorReader::new_unchecked(&self.as_slice()[start..end])
         } else {
-            BoolReader::new_unchecked(&self.as_slice()[start..])
+            CoordinatorReader::new_unchecked(&self.as_slice()[start..])
         }
     }
 }
@@ -7232,6 +7460,7 @@ impl<'r> molecule::prelude::Reader<'r> for ChannelParametersReader<'r> {
         AppReader::verify(&slice[offsets[4]..offsets[5]], compatible)?;
         BoolReader::verify(&slice[offsets[5]..offsets[6]], compatible)?;
         BoolReader::verify(&slice[offsets[6]..offsets[7]], compatible)?;
+        CoordinatorReader::verify(&slice[offsets[7]..offsets[8]], compatible)?;
         Ok(())
     }
 }
@@ -7244,9 +7473,10 @@ pub struct ChannelParametersBuilder {
     pub(crate) app: App,
     pub(crate) is_ledger_channel: Bool,
     pub(crate) is_virtual_channel: Bool,
+    pub(crate) coordinator: Coordinator,
 }
 impl ChannelParametersBuilder {
-    pub const FIELD_COUNT: usize = 7;
+    pub const FIELD_COUNT: usize = 8;
     pub fn party_a(mut self, v: Participant) -> Self {
         self.party_a = v;
         self
@@ -7275,6 +7505,10 @@ impl ChannelParametersBuilder {
         self.is_virtual_channel = v;
         self
     }
+    pub fn coordinator(mut self, v: Coordinator) -> Self {
+        self.coordinator = v;
+        self
+    }
 }
 impl molecule::prelude::Builder for ChannelParametersBuilder {
     type Entity = ChannelParameters;
@@ -7288,6 +7522,7 @@ impl molecule::prelude::Builder for ChannelParametersBuilder {
             + self.app.as_slice().len()
             + self.is_ledger_channel.as_slice().len()
             + self.is_virtual_channel.as_slice().len()
+            + self.coordinator.as_slice().len()
     }
     fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
         let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
@@ -7306,6 +7541,8 @@ impl molecule::prelude::Builder for ChannelParametersBuilder {
         total_size += self.is_ledger_channel.as_slice().len();
         offsets.push(total_size);
         total_size += self.is_virtual_channel.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.coordinator.as_slice().len();
         writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
         for offset in offsets.into_iter() {
             writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
@@ -7317,6 +7554,7 @@ impl molecule::prelude::Builder for ChannelParametersBuilder {
         writer.write_all(self.app.as_slice())?;
         writer.write_all(self.is_ledger_channel.as_slice())?;
         writer.write_all(self.is_virtual_channel.as_slice())?;
+        writer.write_all(self.coordinator.as_slice())?;
         Ok(())
     }
     fn build(&self) -> Self::Entity {
@@ -7366,24 +7604,24 @@ impl ::core::default::Default for ChannelConstants {
     }
 }
 impl ChannelConstants {
-    const DEFAULT_VALUE: [u8; 474] = [
-        218, 1, 0, 0, 32, 0, 0, 0, 108, 1, 0, 0, 140, 1, 0, 0, 141, 1, 0, 0, 149, 1, 0, 0, 181, 1,
-        0, 0, 182, 1, 0, 0, 76, 1, 0, 0, 32, 0, 0, 0, 157, 0, 0, 0, 26, 1, 0, 0, 58, 1, 0, 0, 66,
-        1, 0, 0, 66, 1, 0, 0, 71, 1, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92,
+    const DEFAULT_VALUE: [u8; 478] = [
+        222, 1, 0, 0, 32, 0, 0, 0, 112, 1, 0, 0, 144, 1, 0, 0, 145, 1, 0, 0, 153, 1, 0, 0, 185, 1,
+        0, 0, 186, 1, 0, 0, 80, 1, 0, 0, 36, 0, 0, 0, 161, 0, 0, 0, 30, 1, 0, 0, 62, 1, 0, 0, 70,
+        1, 0, 0, 70, 1, 0, 0, 75, 1, 0, 0, 80, 1, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60,
+        0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0,
-        0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125, 0, 0, 0, 20, 0, 0,
+        0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     pub const FIELD_COUNT: usize = 7;
     pub fn total_size(&self) -> usize {
@@ -7765,20 +8003,21 @@ impl ::core::default::Default for VCChannelConstants {
     }
 }
 impl VCChannelConstants {
-    const DEFAULT_VALUE: [u8; 381] = [
-        125, 1, 0, 0, 16, 0, 0, 0, 92, 1, 0, 0, 124, 1, 0, 0, 76, 1, 0, 0, 32, 0, 0, 0, 157, 0, 0,
-        0, 26, 1, 0, 0, 58, 1, 0, 0, 66, 1, 0, 0, 66, 1, 0, 0, 71, 1, 0, 0, 125, 0, 0, 0, 20, 0, 0,
-        0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 125,
-        0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 385] = [
+        129, 1, 0, 0, 16, 0, 0, 0, 96, 1, 0, 0, 128, 1, 0, 0, 80, 1, 0, 0, 36, 0, 0, 0, 161, 0, 0,
+        0, 30, 1, 0, 0, 62, 1, 0, 0, 70, 1, 0, 0, 70, 1, 0, 0, 75, 1, 0, 0, 80, 1, 0, 0, 125, 0, 0,
+        0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0,
     ];
     pub const FIELD_COUNT: usize = 3;
     pub fn total_size(&self) -> usize {
@@ -9295,6 +9534,322 @@ impl molecule::prelude::Builder for CloseBuilder {
     }
 }
 #[derive(Clone)]
+pub struct Coordinate(molecule::bytes::Bytes);
+impl ::core::fmt::LowerHex for Coordinate {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl ::core::fmt::Debug for Coordinate {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl ::core::fmt::Display for Coordinate {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "state", self.state())?;
+        write!(f, ", {}: {}", "sig_a", self.sig_a())?;
+        write!(f, ", {}: {}", "sig_b", self.sig_b())?;
+        write!(f, ", {}: {}", "coord_sig", self.coord_sig())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl ::core::default::Default for Coordinate {
+    fn default() -> Self {
+        let v = molecule::bytes::Bytes::from_static(&Self::DEFAULT_VALUE);
+        Coordinate::new_unchecked(v)
+    }
+}
+impl Coordinate {
+    const DEFAULT_VALUE: [u8; 117] = [
+        117, 0, 0, 0, 20, 0, 0, 0, 105, 0, 0, 0, 109, 0, 0, 0, 113, 0, 0, 0, 85, 0, 0, 0, 20, 0, 0,
+        0, 52, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 12, 0, 0, 0, 16, 0, 0, 0, 4,
+        0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    pub const FIELD_COUNT: usize = 4;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn state(&self) -> ChannelState {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        let end = molecule::unpack_number(&slice[8..]) as usize;
+        ChannelState::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn sig_a(&self) -> Bytes {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[8..]) as usize;
+        let end = molecule::unpack_number(&slice[12..]) as usize;
+        Bytes::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn sig_b(&self) -> Bytes {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[12..]) as usize;
+        let end = molecule::unpack_number(&slice[16..]) as usize;
+        Bytes::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn coord_sig(&self) -> Bytes {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[16..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[20..]) as usize;
+            Bytes::new_unchecked(self.0.slice(start..end))
+        } else {
+            Bytes::new_unchecked(self.0.slice(start..))
+        }
+    }
+    pub fn as_reader<'r>(&'r self) -> CoordinateReader<'r> {
+        CoordinateReader::new_unchecked(self.as_slice())
+    }
+}
+impl molecule::prelude::Entity for Coordinate {
+    type Builder = CoordinateBuilder;
+    const NAME: &'static str = "Coordinate";
+    fn new_unchecked(data: molecule::bytes::Bytes) -> Self {
+        Coordinate(data)
+    }
+    fn as_bytes(&self) -> molecule::bytes::Bytes {
+        self.0.clone()
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.0[..]
+    }
+    fn from_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        CoordinateReader::from_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn from_compatible_slice(slice: &[u8]) -> molecule::error::VerificationResult<Self> {
+        CoordinateReader::from_compatible_slice(slice).map(|reader| reader.to_entity())
+    }
+    fn new_builder() -> Self::Builder {
+        ::core::default::Default::default()
+    }
+    fn as_builder(self) -> Self::Builder {
+        Self::new_builder()
+            .state(self.state())
+            .sig_a(self.sig_a())
+            .sig_b(self.sig_b())
+            .coord_sig(self.coord_sig())
+    }
+}
+#[derive(Clone, Copy)]
+pub struct CoordinateReader<'r>(&'r [u8]);
+impl<'r> ::core::fmt::LowerHex for CoordinateReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        use molecule::hex_string;
+        if f.alternate() {
+            write!(f, "0x")?;
+        }
+        write!(f, "{}", hex_string(self.as_slice()))
+    }
+}
+impl<'r> ::core::fmt::Debug for CoordinateReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{}({:#x})", Self::NAME, self)
+    }
+}
+impl<'r> ::core::fmt::Display for CoordinateReader<'r> {
+    fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
+        write!(f, "{} {{ ", Self::NAME)?;
+        write!(f, "{}: {}", "state", self.state())?;
+        write!(f, ", {}: {}", "sig_a", self.sig_a())?;
+        write!(f, ", {}: {}", "sig_b", self.sig_b())?;
+        write!(f, ", {}: {}", "coord_sig", self.coord_sig())?;
+        let extra_count = self.count_extra_fields();
+        if extra_count != 0 {
+            write!(f, ", .. ({} fields)", extra_count)?;
+        }
+        write!(f, " }}")
+    }
+}
+impl<'r> CoordinateReader<'r> {
+    pub const FIELD_COUNT: usize = 4;
+    pub fn total_size(&self) -> usize {
+        molecule::unpack_number(self.as_slice()) as usize
+    }
+    pub fn field_count(&self) -> usize {
+        if self.total_size() == molecule::NUMBER_SIZE {
+            0
+        } else {
+            (molecule::unpack_number(&self.as_slice()[molecule::NUMBER_SIZE..]) as usize / 4) - 1
+        }
+    }
+    pub fn count_extra_fields(&self) -> usize {
+        self.field_count() - Self::FIELD_COUNT
+    }
+    pub fn has_extra_fields(&self) -> bool {
+        Self::FIELD_COUNT != self.field_count()
+    }
+    pub fn state(&self) -> ChannelStateReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[4..]) as usize;
+        let end = molecule::unpack_number(&slice[8..]) as usize;
+        ChannelStateReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn sig_a(&self) -> BytesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[8..]) as usize;
+        let end = molecule::unpack_number(&slice[12..]) as usize;
+        BytesReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn sig_b(&self) -> BytesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[12..]) as usize;
+        let end = molecule::unpack_number(&slice[16..]) as usize;
+        BytesReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn coord_sig(&self) -> BytesReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[16..]) as usize;
+        if self.has_extra_fields() {
+            let end = molecule::unpack_number(&slice[20..]) as usize;
+            BytesReader::new_unchecked(&self.as_slice()[start..end])
+        } else {
+            BytesReader::new_unchecked(&self.as_slice()[start..])
+        }
+    }
+}
+impl<'r> molecule::prelude::Reader<'r> for CoordinateReader<'r> {
+    type Entity = Coordinate;
+    const NAME: &'static str = "CoordinateReader";
+    fn to_entity(&self) -> Self::Entity {
+        Self::Entity::new_unchecked(self.as_slice().to_owned().into())
+    }
+    fn new_unchecked(slice: &'r [u8]) -> Self {
+        CoordinateReader(slice)
+    }
+    fn as_slice(&self) -> &'r [u8] {
+        self.0
+    }
+    fn verify(slice: &[u8], compatible: bool) -> molecule::error::VerificationResult<()> {
+        use molecule::verification_error as ve;
+        let slice_len = slice.len();
+        if slice_len < molecule::NUMBER_SIZE {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE, slice_len);
+        }
+        let total_size = molecule::unpack_number(slice) as usize;
+        if slice_len != total_size {
+            return ve!(Self, TotalSizeNotMatch, total_size, slice_len);
+        }
+        if slice_len < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, HeaderIsBroken, molecule::NUMBER_SIZE * 2, slice_len);
+        }
+        let offset_first = molecule::unpack_number(&slice[molecule::NUMBER_SIZE..]) as usize;
+        if offset_first % molecule::NUMBER_SIZE != 0 || offset_first < molecule::NUMBER_SIZE * 2 {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        if slice_len < offset_first {
+            return ve!(Self, HeaderIsBroken, offset_first, slice_len);
+        }
+        let field_count = offset_first / molecule::NUMBER_SIZE - 1;
+        if field_count < Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        } else if !compatible && field_count > Self::FIELD_COUNT {
+            return ve!(Self, FieldCountNotMatch, Self::FIELD_COUNT, field_count);
+        };
+        let mut offsets: Vec<usize> = slice[molecule::NUMBER_SIZE..offset_first]
+            .chunks_exact(molecule::NUMBER_SIZE)
+            .map(|x| molecule::unpack_number(x) as usize)
+            .collect();
+        offsets.push(total_size);
+        if offsets.windows(2).any(|i| i[0] > i[1]) {
+            return ve!(Self, OffsetsNotMatch);
+        }
+        ChannelStateReader::verify(&slice[offsets[0]..offsets[1]], compatible)?;
+        BytesReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
+        BytesReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
+        BytesReader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
+        Ok(())
+    }
+}
+#[derive(Clone, Debug, Default)]
+pub struct CoordinateBuilder {
+    pub(crate) state: ChannelState,
+    pub(crate) sig_a: Bytes,
+    pub(crate) sig_b: Bytes,
+    pub(crate) coord_sig: Bytes,
+}
+impl CoordinateBuilder {
+    pub const FIELD_COUNT: usize = 4;
+    pub fn state(mut self, v: ChannelState) -> Self {
+        self.state = v;
+        self
+    }
+    pub fn sig_a(mut self, v: Bytes) -> Self {
+        self.sig_a = v;
+        self
+    }
+    pub fn sig_b(mut self, v: Bytes) -> Self {
+        self.sig_b = v;
+        self
+    }
+    pub fn coord_sig(mut self, v: Bytes) -> Self {
+        self.coord_sig = v;
+        self
+    }
+}
+impl molecule::prelude::Builder for CoordinateBuilder {
+    type Entity = Coordinate;
+    const NAME: &'static str = "CoordinateBuilder";
+    fn expected_length(&self) -> usize {
+        molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1)
+            + self.state.as_slice().len()
+            + self.sig_a.as_slice().len()
+            + self.sig_b.as_slice().len()
+            + self.coord_sig.as_slice().len()
+    }
+    fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
+        let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
+        let mut offsets = Vec::with_capacity(Self::FIELD_COUNT);
+        offsets.push(total_size);
+        total_size += self.state.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.sig_a.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.sig_b.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.coord_sig.as_slice().len();
+        writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
+        for offset in offsets.into_iter() {
+            writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
+        }
+        writer.write_all(self.state.as_slice())?;
+        writer.write_all(self.sig_a.as_slice())?;
+        writer.write_all(self.sig_b.as_slice())?;
+        writer.write_all(self.coord_sig.as_slice())?;
+        Ok(())
+    }
+    fn build(&self) -> Self::Entity {
+        let mut inner = Vec::with_capacity(self.expected_length());
+        self.write(&mut inner)
+            .unwrap_or_else(|_| panic!("{} build should be ok", Self::NAME));
+        Coordinate::new_unchecked(inner.into())
+    }
+}
+#[derive(Clone)]
 pub struct ForceClose(molecule::bytes::Bytes);
 impl ::core::fmt::LowerHex for ForceClose {
     fn fmt(&self, f: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -9539,7 +10094,7 @@ impl ::core::default::Default for ChannelWitness {
 }
 impl ChannelWitness {
     const DEFAULT_VALUE: [u8; 5] = [0, 0, 0, 0, 0];
-    pub const ITEMS_COUNT: usize = 6;
+    pub const ITEMS_COUNT: usize = 7;
     pub fn item_id(&self) -> molecule::Number {
         molecule::unpack_number(self.as_slice())
     }
@@ -9552,6 +10107,7 @@ impl ChannelWitness {
             3 => VCDispute::new_unchecked(inner).into(),
             4 => Close::new_unchecked(inner).into(),
             5 => ForceClose::new_unchecked(inner).into(),
+            6 => Coordinate::new_unchecked(inner).into(),
             _ => panic!("{}: invalid data", Self::NAME),
         }
     }
@@ -9608,7 +10164,7 @@ impl<'r> ::core::fmt::Display for ChannelWitnessReader<'r> {
     }
 }
 impl<'r> ChannelWitnessReader<'r> {
-    pub const ITEMS_COUNT: usize = 6;
+    pub const ITEMS_COUNT: usize = 7;
     pub fn item_id(&self) -> molecule::Number {
         molecule::unpack_number(self.as_slice())
     }
@@ -9621,6 +10177,7 @@ impl<'r> ChannelWitnessReader<'r> {
             3 => VCDisputeReader::new_unchecked(inner).into(),
             4 => CloseReader::new_unchecked(inner).into(),
             5 => ForceCloseReader::new_unchecked(inner).into(),
+            6 => CoordinateReader::new_unchecked(inner).into(),
             _ => panic!("{}: invalid data", Self::NAME),
         }
     }
@@ -9652,6 +10209,7 @@ impl<'r> molecule::prelude::Reader<'r> for ChannelWitnessReader<'r> {
             3 => VCDisputeReader::verify(inner_slice, compatible),
             4 => CloseReader::verify(inner_slice, compatible),
             5 => ForceCloseReader::verify(inner_slice, compatible),
+            6 => CoordinateReader::verify(inner_slice, compatible),
             _ => ve!(Self, UnknownItem, Self::ITEMS_COUNT, item_id),
         }?;
         Ok(())
@@ -9660,7 +10218,7 @@ impl<'r> molecule::prelude::Reader<'r> for ChannelWitnessReader<'r> {
 #[derive(Clone, Debug, Default)]
 pub struct ChannelWitnessBuilder(pub(crate) ChannelWitnessUnion);
 impl ChannelWitnessBuilder {
-    pub const ITEMS_COUNT: usize = 6;
+    pub const ITEMS_COUNT: usize = 7;
     pub fn set<I>(mut self, v: I) -> Self
     where
         I: ::core::convert::Into<ChannelWitnessUnion>,
@@ -9694,6 +10252,7 @@ pub enum ChannelWitnessUnion {
     VCDispute(VCDispute),
     Close(Close),
     ForceClose(ForceClose),
+    Coordinate(Coordinate),
 }
 #[derive(Debug, Clone, Copy)]
 pub enum ChannelWitnessUnionReader<'r> {
@@ -9703,6 +10262,7 @@ pub enum ChannelWitnessUnionReader<'r> {
     VCDispute(VCDisputeReader<'r>),
     Close(CloseReader<'r>),
     ForceClose(ForceCloseReader<'r>),
+    Coordinate(CoordinateReader<'r>),
 }
 impl ::core::default::Default for ChannelWitnessUnion {
     fn default() -> Self {
@@ -9730,6 +10290,9 @@ impl ::core::fmt::Display for ChannelWitnessUnion {
             ChannelWitnessUnion::ForceClose(ref item) => {
                 write!(f, "{}::{}({})", Self::NAME, ForceClose::NAME, item)
             }
+            ChannelWitnessUnion::Coordinate(ref item) => {
+                write!(f, "{}::{}({})", Self::NAME, Coordinate::NAME, item)
+            }
         }
     }
 }
@@ -9754,6 +10317,9 @@ impl<'r> ::core::fmt::Display for ChannelWitnessUnionReader<'r> {
             ChannelWitnessUnionReader::ForceClose(ref item) => {
                 write!(f, "{}::{}({})", Self::NAME, ForceClose::NAME, item)
             }
+            ChannelWitnessUnionReader::Coordinate(ref item) => {
+                write!(f, "{}::{}({})", Self::NAME, Coordinate::NAME, item)
+            }
         }
     }
 }
@@ -9766,6 +10332,7 @@ impl ChannelWitnessUnion {
             ChannelWitnessUnion::VCDispute(ref item) => write!(f, "{}", item),
             ChannelWitnessUnion::Close(ref item) => write!(f, "{}", item),
             ChannelWitnessUnion::ForceClose(ref item) => write!(f, "{}", item),
+            ChannelWitnessUnion::Coordinate(ref item) => write!(f, "{}", item),
         }
     }
 }
@@ -9778,6 +10345,7 @@ impl<'r> ChannelWitnessUnionReader<'r> {
             ChannelWitnessUnionReader::VCDispute(ref item) => write!(f, "{}", item),
             ChannelWitnessUnionReader::Close(ref item) => write!(f, "{}", item),
             ChannelWitnessUnionReader::ForceClose(ref item) => write!(f, "{}", item),
+            ChannelWitnessUnionReader::Coordinate(ref item) => write!(f, "{}", item),
         }
     }
 }
@@ -9811,6 +10379,11 @@ impl ::core::convert::From<ForceClose> for ChannelWitnessUnion {
         ChannelWitnessUnion::ForceClose(item)
     }
 }
+impl ::core::convert::From<Coordinate> for ChannelWitnessUnion {
+    fn from(item: Coordinate) -> Self {
+        ChannelWitnessUnion::Coordinate(item)
+    }
+}
 impl<'r> ::core::convert::From<FundReader<'r>> for ChannelWitnessUnionReader<'r> {
     fn from(item: FundReader<'r>) -> Self {
         ChannelWitnessUnionReader::Fund(item)
@@ -9841,6 +10414,11 @@ impl<'r> ::core::convert::From<ForceCloseReader<'r>> for ChannelWitnessUnionRead
         ChannelWitnessUnionReader::ForceClose(item)
     }
 }
+impl<'r> ::core::convert::From<CoordinateReader<'r>> for ChannelWitnessUnionReader<'r> {
+    fn from(item: CoordinateReader<'r>) -> Self {
+        ChannelWitnessUnionReader::Coordinate(item)
+    }
+}
 impl ChannelWitnessUnion {
     pub const NAME: &'static str = "ChannelWitnessUnion";
     pub fn as_bytes(&self) -> molecule::bytes::Bytes {
@@ -9851,6 +10429,7 @@ impl ChannelWitnessUnion {
             ChannelWitnessUnion::VCDispute(item) => item.as_bytes(),
             ChannelWitnessUnion::Close(item) => item.as_bytes(),
             ChannelWitnessUnion::ForceClose(item) => item.as_bytes(),
+            ChannelWitnessUnion::Coordinate(item) => item.as_bytes(),
         }
     }
     pub fn as_slice(&self) -> &[u8] {
@@ -9861,6 +10440,7 @@ impl ChannelWitnessUnion {
             ChannelWitnessUnion::VCDispute(item) => item.as_slice(),
             ChannelWitnessUnion::Close(item) => item.as_slice(),
             ChannelWitnessUnion::ForceClose(item) => item.as_slice(),
+            ChannelWitnessUnion::Coordinate(item) => item.as_slice(),
         }
     }
     pub fn item_id(&self) -> molecule::Number {
@@ -9871,6 +10451,7 @@ impl ChannelWitnessUnion {
             ChannelWitnessUnion::VCDispute(_) => 3,
             ChannelWitnessUnion::Close(_) => 4,
             ChannelWitnessUnion::ForceClose(_) => 5,
+            ChannelWitnessUnion::Coordinate(_) => 6,
         }
     }
     pub fn item_name(&self) -> &str {
@@ -9881,6 +10462,7 @@ impl ChannelWitnessUnion {
             ChannelWitnessUnion::VCDispute(_) => "VCDispute",
             ChannelWitnessUnion::Close(_) => "Close",
             ChannelWitnessUnion::ForceClose(_) => "ForceClose",
+            ChannelWitnessUnion::Coordinate(_) => "Coordinate",
         }
     }
     pub fn as_reader<'r>(&'r self) -> ChannelWitnessUnionReader<'r> {
@@ -9891,6 +10473,7 @@ impl ChannelWitnessUnion {
             ChannelWitnessUnion::VCDispute(item) => item.as_reader().into(),
             ChannelWitnessUnion::Close(item) => item.as_reader().into(),
             ChannelWitnessUnion::ForceClose(item) => item.as_reader().into(),
+            ChannelWitnessUnion::Coordinate(item) => item.as_reader().into(),
         }
     }
 }
@@ -9904,6 +10487,7 @@ impl<'r> ChannelWitnessUnionReader<'r> {
             ChannelWitnessUnionReader::VCDispute(item) => item.as_slice(),
             ChannelWitnessUnionReader::Close(item) => item.as_slice(),
             ChannelWitnessUnionReader::ForceClose(item) => item.as_slice(),
+            ChannelWitnessUnionReader::Coordinate(item) => item.as_slice(),
         }
     }
     pub fn item_id(&self) -> molecule::Number {
@@ -9914,6 +10498,7 @@ impl<'r> ChannelWitnessUnionReader<'r> {
             ChannelWitnessUnionReader::VCDispute(_) => 3,
             ChannelWitnessUnionReader::Close(_) => 4,
             ChannelWitnessUnionReader::ForceClose(_) => 5,
+            ChannelWitnessUnionReader::Coordinate(_) => 6,
         }
     }
     pub fn item_name(&self) -> &str {
@@ -9924,6 +10509,7 @@ impl<'r> ChannelWitnessUnionReader<'r> {
             ChannelWitnessUnionReader::VCDispute(_) => "VCDispute",
             ChannelWitnessUnionReader::Close(_) => "Close",
             ChannelWitnessUnionReader::ForceClose(_) => "ForceClose",
+            ChannelWitnessUnionReader::Coordinate(_) => "Coordinate",
         }
     }
 }
@@ -9954,6 +10540,11 @@ impl From<Close> for ChannelWitness {
 }
 impl From<ForceClose> for ChannelWitness {
     fn from(value: ForceClose) -> Self {
+        Self::new_builder().set(value).build()
+    }
+}
+impl From<Coordinate> for ChannelWitness {
+    fn from(value: Coordinate) -> Self {
         Self::new_builder().set(value).build()
     }
 }
@@ -10295,6 +10886,7 @@ impl ::core::fmt::Display for ChannelStatus {
         write!(f, ", {}: {}", "disputed", self.disputed())?;
         write!(f, ", {}: {}", "vc_disputed", self.vc_disputed())?;
         write!(f, ", {}: {}", "vcts_hash", self.vcts_hash())?;
+        write!(f, ", {}: {}", "coordinated", self.coordinated())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
             write!(f, ", .. ({} fields)", extra_count)?;
@@ -10309,15 +10901,15 @@ impl ::core::default::Default for ChannelStatus {
     }
 }
 impl ChannelStatus {
-    const DEFAULT_VALUE: [u8; 156] = [
-        156, 0, 0, 0, 24, 0, 0, 0, 109, 0, 0, 0, 114, 0, 0, 0, 119, 0, 0, 0, 124, 0, 0, 0, 85, 0,
-        0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 12, 0, 0, 0,
-        16, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 165] = [
+        165, 0, 0, 0, 28, 0, 0, 0, 113, 0, 0, 0, 118, 0, 0, 0, 123, 0, 0, 0, 128, 0, 0, 0, 160, 0,
+        0, 0, 85, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 12,
+        0, 0, 0, 16, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const FIELD_COUNT: usize = 5;
+    pub const FIELD_COUNT: usize = 6;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -10361,11 +10953,17 @@ impl ChannelStatus {
     pub fn vcts_hash(&self) -> Byte32 {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[20..]) as usize;
+        let end = molecule::unpack_number(&slice[24..]) as usize;
+        Byte32::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn coordinated(&self) -> Bool {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[24..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[24..]) as usize;
-            Byte32::new_unchecked(self.0.slice(start..end))
+            let end = molecule::unpack_number(&slice[28..]) as usize;
+            Bool::new_unchecked(self.0.slice(start..end))
         } else {
-            Byte32::new_unchecked(self.0.slice(start..))
+            Bool::new_unchecked(self.0.slice(start..))
         }
     }
     pub fn as_reader<'r>(&'r self) -> ChannelStatusReader<'r> {
@@ -10400,6 +10998,7 @@ impl molecule::prelude::Entity for ChannelStatus {
             .disputed(self.disputed())
             .vc_disputed(self.vc_disputed())
             .vcts_hash(self.vcts_hash())
+            .coordinated(self.coordinated())
     }
 }
 #[derive(Clone, Copy)]
@@ -10426,6 +11025,7 @@ impl<'r> ::core::fmt::Display for ChannelStatusReader<'r> {
         write!(f, ", {}: {}", "disputed", self.disputed())?;
         write!(f, ", {}: {}", "vc_disputed", self.vc_disputed())?;
         write!(f, ", {}: {}", "vcts_hash", self.vcts_hash())?;
+        write!(f, ", {}: {}", "coordinated", self.coordinated())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
             write!(f, ", .. ({} fields)", extra_count)?;
@@ -10434,7 +11034,7 @@ impl<'r> ::core::fmt::Display for ChannelStatusReader<'r> {
     }
 }
 impl<'r> ChannelStatusReader<'r> {
-    pub const FIELD_COUNT: usize = 5;
+    pub const FIELD_COUNT: usize = 6;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -10478,11 +11078,17 @@ impl<'r> ChannelStatusReader<'r> {
     pub fn vcts_hash(&self) -> Byte32Reader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[20..]) as usize;
+        let end = molecule::unpack_number(&slice[24..]) as usize;
+        Byte32Reader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn coordinated(&self) -> BoolReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[24..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[24..]) as usize;
-            Byte32Reader::new_unchecked(&self.as_slice()[start..end])
+            let end = molecule::unpack_number(&slice[28..]) as usize;
+            BoolReader::new_unchecked(&self.as_slice()[start..end])
         } else {
-            Byte32Reader::new_unchecked(&self.as_slice()[start..])
+            BoolReader::new_unchecked(&self.as_slice()[start..])
         }
     }
 }
@@ -10537,6 +11143,7 @@ impl<'r> molecule::prelude::Reader<'r> for ChannelStatusReader<'r> {
         BoolReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
         BoolReader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
         Byte32Reader::verify(&slice[offsets[4]..offsets[5]], compatible)?;
+        BoolReader::verify(&slice[offsets[5]..offsets[6]], compatible)?;
         Ok(())
     }
 }
@@ -10547,9 +11154,10 @@ pub struct ChannelStatusBuilder {
     pub(crate) disputed: Bool,
     pub(crate) vc_disputed: Bool,
     pub(crate) vcts_hash: Byte32,
+    pub(crate) coordinated: Bool,
 }
 impl ChannelStatusBuilder {
-    pub const FIELD_COUNT: usize = 5;
+    pub const FIELD_COUNT: usize = 6;
     pub fn state(mut self, v: ChannelState) -> Self {
         self.state = v;
         self
@@ -10570,6 +11178,10 @@ impl ChannelStatusBuilder {
         self.vcts_hash = v;
         self
     }
+    pub fn coordinated(mut self, v: Bool) -> Self {
+        self.coordinated = v;
+        self
+    }
 }
 impl molecule::prelude::Builder for ChannelStatusBuilder {
     type Entity = ChannelStatus;
@@ -10581,6 +11193,7 @@ impl molecule::prelude::Builder for ChannelStatusBuilder {
             + self.disputed.as_slice().len()
             + self.vc_disputed.as_slice().len()
             + self.vcts_hash.as_slice().len()
+            + self.coordinated.as_slice().len()
     }
     fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
         let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
@@ -10595,6 +11208,8 @@ impl molecule::prelude::Builder for ChannelStatusBuilder {
         total_size += self.vc_disputed.as_slice().len();
         offsets.push(total_size);
         total_size += self.vcts_hash.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.coordinated.as_slice().len();
         writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
         for offset in offsets.into_iter() {
             writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
@@ -10604,6 +11219,7 @@ impl molecule::prelude::Builder for ChannelStatusBuilder {
         writer.write_all(self.disputed.as_slice())?;
         writer.write_all(self.vc_disputed.as_slice())?;
         writer.write_all(self.vcts_hash.as_slice())?;
+        writer.write_all(self.coordinated.as_slice())?;
         Ok(())
     }
     fn build(&self) -> Self::Entity {
@@ -10999,9 +11615,7 @@ impl ParentsVecBuilder {
         self
     }
     pub fn extend<T: ::core::iter::IntoIterator<Item = ParentData>>(mut self, iter: T) -> Self {
-        for elem in iter {
-            self.0.push(elem);
-        }
+        self.0.extend(iter);
         self
     }
     pub fn replace(&mut self, index: usize, v: ParentData) -> Option<ParentData> {
@@ -11104,9 +11718,22 @@ impl<'t: 'r, 'r> ::core::iter::ExactSizeIterator for ParentsVecReaderIterator<'t
         self.2 - self.1
     }
 }
-impl ::core::iter::FromIterator<ParentData> for ParentsVec {
-    fn from_iter<T: IntoIterator<Item = ParentData>>(iter: T) -> Self {
-        Self::new_builder().extend(iter).build()
+impl<T> ::core::iter::FromIterator<T> for ParentsVec
+where
+    T: Into<ParentData>,
+{
+    fn from_iter<I: IntoIterator<Item = T>>(iter: I) -> Self {
+        Self::new_builder()
+            .extend(iter.into_iter().map(Into::into))
+            .build()
+    }
+}
+impl<T> From<Vec<T>> for ParentsVec
+where
+    T: Into<ParentData>,
+{
+    fn from(v: Vec<T>) -> Self {
+        v.into_iter().collect()
     }
 }
 #[derive(Clone)]
@@ -11395,6 +12022,7 @@ impl ::core::fmt::Display for VirtualChannelStatus {
         write!(f, ", {}: {}", "parents", self.parents())?;
         write!(f, ", {}: {}", "first_force_close", self.first_force_close())?;
         write!(f, ", {}: {}", "owner", self.owner())?;
+        write!(f, ", {}: {}", "coordinated", self.coordinated())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
             write!(f, ", .. ({} fields)", extra_count)?;
@@ -11409,18 +12037,18 @@ impl ::core::default::Default for VirtualChannelStatus {
     }
 }
 impl VirtualChannelStatus {
-    const DEFAULT_VALUE: [u8; 239] = [
-        239, 0, 0, 0, 20, 0, 0, 0, 105, 0, 0, 0, 109, 0, 0, 0, 114, 0, 0, 0, 85, 0, 0, 0, 20, 0, 0,
-        0, 52, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 12, 0, 0, 0, 16, 0, 0, 0, 4,
-        0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 125,
-        0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    const DEFAULT_VALUE: [u8; 248] = [
+        248, 0, 0, 0, 24, 0, 0, 0, 109, 0, 0, 0, 113, 0, 0, 0, 118, 0, 0, 0, 243, 0, 0, 0, 85, 0,
+        0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 72, 0, 0, 0, 80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 20, 0, 0, 0, 12, 0, 0, 0,
+        16, 0, 0, 0, 4, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0,
+        0, 0, 0, 0, 125, 0, 0, 0, 20, 0, 0, 0, 52, 0, 0, 0, 60, 0, 0, 0, 92, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
-    pub const FIELD_COUNT: usize = 4;
+    pub const FIELD_COUNT: usize = 5;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -11458,11 +12086,17 @@ impl VirtualChannelStatus {
     pub fn owner(&self) -> Participant {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[16..]) as usize;
+        let end = molecule::unpack_number(&slice[20..]) as usize;
+        Participant::new_unchecked(self.0.slice(start..end))
+    }
+    pub fn coordinated(&self) -> Bool {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[20..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[20..]) as usize;
-            Participant::new_unchecked(self.0.slice(start..end))
+            let end = molecule::unpack_number(&slice[24..]) as usize;
+            Bool::new_unchecked(self.0.slice(start..end))
         } else {
-            Participant::new_unchecked(self.0.slice(start..))
+            Bool::new_unchecked(self.0.slice(start..))
         }
     }
     pub fn as_reader<'r>(&'r self) -> VirtualChannelStatusReader<'r> {
@@ -11496,6 +12130,7 @@ impl molecule::prelude::Entity for VirtualChannelStatus {
             .parents(self.parents())
             .first_force_close(self.first_force_close())
             .owner(self.owner())
+            .coordinated(self.coordinated())
     }
 }
 #[derive(Clone, Copy)]
@@ -11521,6 +12156,7 @@ impl<'r> ::core::fmt::Display for VirtualChannelStatusReader<'r> {
         write!(f, ", {}: {}", "parents", self.parents())?;
         write!(f, ", {}: {}", "first_force_close", self.first_force_close())?;
         write!(f, ", {}: {}", "owner", self.owner())?;
+        write!(f, ", {}: {}", "coordinated", self.coordinated())?;
         let extra_count = self.count_extra_fields();
         if extra_count != 0 {
             write!(f, ", .. ({} fields)", extra_count)?;
@@ -11529,7 +12165,7 @@ impl<'r> ::core::fmt::Display for VirtualChannelStatusReader<'r> {
     }
 }
 impl<'r> VirtualChannelStatusReader<'r> {
-    pub const FIELD_COUNT: usize = 4;
+    pub const FIELD_COUNT: usize = 5;
     pub fn total_size(&self) -> usize {
         molecule::unpack_number(self.as_slice()) as usize
     }
@@ -11567,11 +12203,17 @@ impl<'r> VirtualChannelStatusReader<'r> {
     pub fn owner(&self) -> ParticipantReader<'r> {
         let slice = self.as_slice();
         let start = molecule::unpack_number(&slice[16..]) as usize;
+        let end = molecule::unpack_number(&slice[20..]) as usize;
+        ParticipantReader::new_unchecked(&self.as_slice()[start..end])
+    }
+    pub fn coordinated(&self) -> BoolReader<'r> {
+        let slice = self.as_slice();
+        let start = molecule::unpack_number(&slice[20..]) as usize;
         if self.has_extra_fields() {
-            let end = molecule::unpack_number(&slice[20..]) as usize;
-            ParticipantReader::new_unchecked(&self.as_slice()[start..end])
+            let end = molecule::unpack_number(&slice[24..]) as usize;
+            BoolReader::new_unchecked(&self.as_slice()[start..end])
         } else {
-            ParticipantReader::new_unchecked(&self.as_slice()[start..])
+            BoolReader::new_unchecked(&self.as_slice()[start..])
         }
     }
 }
@@ -11625,6 +12267,7 @@ impl<'r> molecule::prelude::Reader<'r> for VirtualChannelStatusReader<'r> {
         ParentsVecReader::verify(&slice[offsets[1]..offsets[2]], compatible)?;
         BoolReader::verify(&slice[offsets[2]..offsets[3]], compatible)?;
         ParticipantReader::verify(&slice[offsets[3]..offsets[4]], compatible)?;
+        BoolReader::verify(&slice[offsets[4]..offsets[5]], compatible)?;
         Ok(())
     }
 }
@@ -11634,9 +12277,10 @@ pub struct VirtualChannelStatusBuilder {
     pub(crate) parents: ParentsVec,
     pub(crate) first_force_close: Bool,
     pub(crate) owner: Participant,
+    pub(crate) coordinated: Bool,
 }
 impl VirtualChannelStatusBuilder {
-    pub const FIELD_COUNT: usize = 4;
+    pub const FIELD_COUNT: usize = 5;
     pub fn vcstate(mut self, v: ChannelState) -> Self {
         self.vcstate = v;
         self
@@ -11653,6 +12297,10 @@ impl VirtualChannelStatusBuilder {
         self.owner = v;
         self
     }
+    pub fn coordinated(mut self, v: Bool) -> Self {
+        self.coordinated = v;
+        self
+    }
 }
 impl molecule::prelude::Builder for VirtualChannelStatusBuilder {
     type Entity = VirtualChannelStatus;
@@ -11663,6 +12311,7 @@ impl molecule::prelude::Builder for VirtualChannelStatusBuilder {
             + self.parents.as_slice().len()
             + self.first_force_close.as_slice().len()
             + self.owner.as_slice().len()
+            + self.coordinated.as_slice().len()
     }
     fn write<W: molecule::io::Write>(&self, writer: &mut W) -> molecule::io::Result<()> {
         let mut total_size = molecule::NUMBER_SIZE * (Self::FIELD_COUNT + 1);
@@ -11675,6 +12324,8 @@ impl molecule::prelude::Builder for VirtualChannelStatusBuilder {
         total_size += self.first_force_close.as_slice().len();
         offsets.push(total_size);
         total_size += self.owner.as_slice().len();
+        offsets.push(total_size);
+        total_size += self.coordinated.as_slice().len();
         writer.write_all(&molecule::pack_number(total_size as molecule::Number))?;
         for offset in offsets.into_iter() {
             writer.write_all(&molecule::pack_number(offset as molecule::Number))?;
@@ -11683,6 +12334,7 @@ impl molecule::prelude::Builder for VirtualChannelStatusBuilder {
         writer.write_all(self.parents.as_slice())?;
         writer.write_all(self.first_force_close.as_slice())?;
         writer.write_all(self.owner.as_slice())?;
+        writer.write_all(self.coordinated.as_slice())?;
         Ok(())
     }
     fn build(&self) -> Self::Entity {

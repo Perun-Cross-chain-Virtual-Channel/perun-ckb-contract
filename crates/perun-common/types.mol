@@ -65,6 +65,7 @@ array A [byte; 1];
 array B [byte; 1];
 
 option App (Bytes);
+option Coordinator (SEC1EncodedPubKey);
 
 table Participant {
   payment_script_hash:  Byte32,
@@ -81,6 +82,7 @@ table ChannelParameters {
   app: App,
   is_ledger_channel: Bool,
   is_virtual_channel: Bool,
+  coordinator: Coordinator,
 }
 
 table ChannelConstants {
@@ -119,6 +121,13 @@ table Close {
   sig_b: Bytes,
 }
 
+table Coordinate {
+  state: ChannelState,
+  sig_a: Bytes,
+  sig_b: Bytes,
+  coord_sig: Bytes,
+}
+
 array ForceClose [byte; 1];
 
 union ChannelWitness {
@@ -128,6 +137,7 @@ union ChannelWitness {
   VCDispute,
   Close,
   ForceClose,
+  Coordinate,
 }
 
 table ChannelState {
@@ -143,6 +153,7 @@ table ChannelStatus {
   disputed: Bool,
   vc_disputed: Bool,
   vcts_hash: Byte32,
+  coordinated: Bool,
 }
 
 struct ChannelToken {
@@ -161,4 +172,5 @@ table VirtualChannelStatus {
   parents: ParentsVec,
   first_force_close: Bool,
   owner: Participant,
+  coordinated: Bool,
 }

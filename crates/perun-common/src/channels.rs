@@ -56,6 +56,13 @@ pub enum VChannelAction {
         input_lc_status: ChannelStatus,
         input_vc_status: VirtualChannelStatus,
     },
+    /// Coordinate indicates that the virtual channel is being moved into the coordinated phase
+    /// together with its parent ledger channel (one recursive Coordinate transaction). The VC cell
+    /// continues (one VCTS input, one VCTS output) with `coordinated` set to true.
+    Coordinate {
+        old_status: VirtualChannelStatus,
+        new_status: VirtualChannelStatus,
+    },
     // Close indicates that a channel is being closed. This means that a channel's cell is consumed without being
     // recreated in the outputs with updated state. The possible redeemers associated with the Close action are
     // Close, Abort and ForceClose.
@@ -248,6 +255,75 @@ pub fn verify_valid_state_sigs(
     debug!("verify_valid_state_sigs: Signature A verified");
     crate::sig::verify_signature(&msg_hash, sig_b, pub_key_b.as_slice())?;
     debug!("verify_valid_state_sigs: Signature B verified");
+    Ok(())
+}
+
+/// Whether the channel has a coordinator configured (mirrors
+/// `MultiLedger.isCoordinatorConfigured`: `params.coordinator != address(0)`).
+pub fn is_coordinator_configured(params: &ChannelParameters) -> bool {
+    params.coordinator().to_opt().is_some()
+}
+
+/// Whether the channel's assets span more than one ledger (mirrors
+/// `MultiLedger.isMultiLedgerState`). Each asset row maps to a `(backend, chainID)`
+/// pair exactly as `convert_ckb_state` builds them: CKB and SUDT rows are the CKB
+/// ledger `(3, 3)`, ETH rows are `(1, <eth chain id>)`. The state is multi-ledger
+/// iff it has more than one asset and at least one row differs from the first.
+pub fn is_multi_ledger_state(state: &crate::perun_types::ChannelState) -> bool {
+    use crate::perun_types::AnyBalances;
+    use crate::sol::{BACKEND_ID_CKB, BACKEND_ID_ETH};
+
+    let assets = state.balances().assets();
+    let len = assets.len();
+    if len <= 1 {
+        return false;
+    }
+
+    let key_of = |row: &AnyBalances| -> (u64, u128) {
+        if row.is_eth_row() {
+            let eth = row.as_eth().expect("is_eth_row guarantees Some");
+            let mut le = [0u8; 16];
+            le.copy_from_slice(eth.asset().chain_id().as_slice());
+            (BACKEND_ID_ETH, u128::from_le_bytes(le))
+        } else {
+            // CKByteDistribution and SUDTBalances rows are both the CKB ledger.
+            (BACKEND_ID_CKB, BACKEND_ID_CKB as u128)
+        }
+    };
+
+    let first = key_of(&assets.get(0).expect("len > 1"));
+    for i in 1..len {
+        if key_of(&assets.get(i).expect("index in range")) != first {
+            return true;
+        }
+    }
+    false
+}
+
+/// Whether the channel requires coordinated settlement (mirrors
+/// `MultiLedger.isCoordinatedEligible`): a coordinator is configured AND the
+/// state holds assets on more than one ledger.
+pub fn is_coordinated_eligible(
+    params: &ChannelParameters,
+    state: &crate::perun_types::ChannelState,
+) -> bool {
+    is_coordinator_configured(params) && is_multi_ledger_state(state)
+}
+
+/// Verify the coordinator's signature on the canonical state. Uses the exact same
+/// message as participant signatures (`Channel.validateCoordinatorSignature` ->
+/// `Sig.verify(encodeState(state), sig, params.coordinator)`).
+pub fn verify_coordinator_sig(
+    coord_sig: &ckb_std::ckb_types::bytes::Bytes,
+    state: &crate::perun_types::ChannelState,
+    coord_pub_key: &crate::perun_types::SEC1EncodedPubKey,
+) -> Result<(), Error> {
+    use alloy_sol_types::SolValue;
+    let state_eth = crate::sol::convert_ckb_state(state);
+    let state_abi_encoded = state_eth.abi_encode();
+    let msg_hash = crate::sig::ethereum_message_hash(&state_abi_encoded);
+    crate::sig::verify_signature(&msg_hash, coord_sig, coord_pub_key.as_slice())
+        .map_err(|_| Error::InvalidCoordinatorSignature)?;
     Ok(())
 }
 

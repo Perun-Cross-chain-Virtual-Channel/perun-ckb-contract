@@ -24,8 +24,8 @@ use crate::{
     helpers::{bytes_to_u128, bytes_to_u64},
     perun_types::{ChannelParameters, Participant},
 };
-const BACKEND_ID_CKB: u64 = 3;
-const BACKEND_ID_ETH: u64 = 1;
+pub const BACKEND_ID_CKB: u64 = 3;
+pub const BACKEND_ID_ETH: u64 = 1;
 const CKBYTE_MAGIC: u8 = 0x00;
 const SUDT_MAGIC: u8 = 0x01;
 sol! {
@@ -41,6 +41,7 @@ sol! {
         address app;
         bool ledgerChannel;
         bool virtualChannel;
+        address coordinator;
     }
     #[derive(Debug)]
 
@@ -72,7 +73,7 @@ sol! {
 
     struct SubAllocSol {
         // ID is the channelID of the subchannel
-        bytes32[] ID; // solhint-disable-line var-name-mixedcase
+        bytes32 ID; // solhint-disable-line var-name-mixedcase
         // balances holds the total balance of the subchannel of every asset.
         uint256[] balances;
         // indexMap maps each sub-channel participant to a parent channel
@@ -187,7 +188,7 @@ pub fn convert_ckb_state(state: &ChannelState) -> StateSol {
         ];
 
         locked.push(SubAllocSol {
-            ID: vec![id],
+            ID: id,
             balances: sub_balances,
             indexMap: index_map,
         });
@@ -245,6 +246,15 @@ pub fn convert_params(params: &ChannelParameters) -> ParamsSol {
     let chall_duration = U256::from(chall_duration_u64);
     let app_alloy = Address::from_slice(&[0u8; 20]);
 
+    // The coordinator is stored as an optional SEC1 pubkey. None encodes as
+    // address(0) (no coordinator); Some(pubkey) encodes as the derived eth
+    // address, matching how Ethereum stores `address coordinator` in Params.
+    let coordinator_alloy = match params.coordinator().to_opt() {
+        Some(pub_key) => eth_address_from_sec1_pubkey(pub_key.as_slice())
+            .expect("unable to derive eth address from coordinator pub_key"),
+        None => Address::from_slice(&[0u8; 20]),
+    };
+
     ParamsSol {
         challengeDuration: chall_duration,
         nonce: nonce_alloy,
@@ -252,6 +262,7 @@ pub fn convert_params(params: &ChannelParameters) -> ParamsSol {
         app: app_alloy,
         ledgerChannel: params.is_ledger_channel().to_bool(),
         virtualChannel: params.is_virtual_channel().to_bool(),
+        coordinator: coordinator_alloy,
     }
 }
 
@@ -486,6 +497,7 @@ mod tests {
             app: Address::default(),
             ledgerChannel: false,
             virtualChannel: true,
+            coordinator: Address::default(),
         };
 
         // Modify ParamsSol fields
