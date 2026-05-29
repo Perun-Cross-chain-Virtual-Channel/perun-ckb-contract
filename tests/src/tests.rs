@@ -9,13 +9,16 @@ use ckb_testtool::ckb_types::{bytes::Bytes, packed::*, prelude::*};
 use ckb_testtool::context::Context;
 use perun;
 use perun::{test, virtual_channel};
+use perun_common::channels::{
+    is_coordinated_eligible, is_multi_ledger_state, verify_coordinator_sig,
+};
 use perun_common::perun_types::{
-    Allocation, AnyBalances, AnyBalancesUnion, Balances, Bool, CKByteDistribution, ChannelState,
-    ETHAsset, ETHBalances, ETHDistribution, EthAddress, LockedBalances, SEC1EncodedPubKey,
-    SubAlloc,
+    Allocation, AnyBalances, AnyBalancesUnion, Balances, Bool, CKByteDistribution,
+    ChannelParameters, ChannelState, Coordinator, ETHAsset, ETHBalances, ETHDistribution,
+    EthAddress, LockedBalances, Participant, SEC1EncodedPubKey, SubAlloc,
 };
 use perun_common::sig::{ethereum_message_hash, verify_signature};
-use perun_common::sol::convert_ckb_state;
+use perun_common::sol::{convert_ckb_state, convert_params, eth_address_from_sec1_pubkey};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Mutex;
@@ -206,6 +209,171 @@ fn test_cross_signature() {
     verify_signature(&msg_hash, &sig_bytes2, pk_point2.as_bytes()).expect("valid signature");
 }
 
+// Build a deterministic secp256k1 keypair from a seed byte, returning the signing
+// key together with its SEC1-compressed public key (raw bytes + molecule type).
+fn sec1_keypair(seed: u8) -> (k256::ecdsa::SigningKey, [u8; 33], SEC1EncodedPubKey) {
+    let sk = k256::ecdsa::SigningKey::from_bytes((&[seed; 32]).into()).expect("invalid sk");
+    let point = sk.verifying_key().to_encoded_point(true);
+    let raw: [u8; 33] = point.as_bytes().try_into().expect("33-byte sec1 pubkey");
+    let bytes: [Byte; 33] = raw
+        .iter()
+        .map(|b| Byte::from(*b))
+        .collect::<Vec<Byte>>()
+        .try_into()
+        .unwrap();
+    (sk, raw, SEC1EncodedPubKey::new_builder().set(bytes).build())
+}
+
+fn mk_participant(pub_key: SEC1EncodedPubKey, tag: u8) -> Participant {
+    Participant::new_builder()
+        .payment_script_hash(Byte32::from_slice(&[tag; 32]).unwrap())
+        .payment_min_capacity(1_000u64.pack())
+        .unlock_script_hash(Byte32::from_slice(&[tag.wrapping_add(1); 32]).unwrap())
+        .pub_key(pub_key)
+        .build()
+}
+
+fn mk_params(
+    party_a: Participant,
+    party_b: Participant,
+    coordinator: Option<SEC1EncodedPubKey>,
+) -> ChannelParameters {
+    ChannelParameters::new_builder()
+        .party_a(party_a)
+        .party_b(party_b)
+        .nonce(Byte32::from_slice(&[7u8; 32]).unwrap())
+        .challenge_duration(1234u64.pack())
+        .is_ledger_channel(Bool::from_bool(true))
+        .is_virtual_channel(Bool::from_bool(false))
+        .coordinator(Coordinator::new_builder().set(coordinator).build())
+        .build()
+}
+
+fn ckb_only_state() -> ChannelState {
+    let ck = AnyBalancesUnion::CKByteDistribution(
+        CKByteDistribution::new_builder()
+            .set([10u64.pack(), 11u64.pack()])
+            .build(),
+    );
+    let balances = Balances::new_builder()
+        .assets(
+            Allocation::new_builder()
+                .push(AnyBalances::new_builder().set(ck).build())
+                .build(),
+        )
+        .locked(LockedBalances::default())
+        .build();
+    ChannelState::new_builder()
+        .channel_id(Byte32::from_slice(&[1u8; 32]).unwrap())
+        .balances(balances)
+        .version(1u64.pack())
+        .is_final(Bool::from_bool(false))
+        .build()
+}
+
+fn ckb_eth_state() -> ChannelState {
+    let ck = AnyBalancesUnion::CKByteDistribution(
+        CKByteDistribution::new_builder()
+            .set([10u64.pack(), 11u64.pack()])
+            .build(),
+    );
+    let eth = AnyBalancesUnion::ETHBalances(
+        ETHBalances::new_builder()
+            .asset(
+                ETHAsset::new_builder()
+                    .chain_id(u128_le_as_uint128(1337))
+                    .asset_address(eth_address_from_hex(
+                        "4E1D65a1E558029058903528140438802a6B5dfC",
+                    ))
+                    .build(),
+            )
+            .distribution(
+                ETHDistribution::new_builder()
+                    .nth0(u128_le_as_uint128(5))
+                    .nth1(u128_le_as_uint128(6))
+                    .build(),
+            )
+            .build(),
+    );
+    let balances = Balances::new_builder()
+        .assets(
+            Allocation::new_builder()
+                .push(AnyBalances::new_builder().set(ck).build())
+                .push(AnyBalances::new_builder().set(eth).build())
+                .build(),
+        )
+        .locked(LockedBalances::default())
+        .build();
+    ChannelState::new_builder()
+        .channel_id(Byte32::from_slice(&[1u8; 32]).unwrap())
+        .balances(balances)
+        .version(1u64.pack())
+        .is_final(Bool::from_bool(false))
+        .build()
+}
+
+// Validates the cross-chain coordinated-settlement primitives in perun-common:
+// the coordinator is encoded into Params (changing the channel id), multi-ledger
+// states are detected, eligibility follows MultiLedger.sol, and the coordinator
+// signature verifies with the same EIP-191 scheme as participant signatures.
+#[test]
+fn test_coordinator_encoding_and_multiledger() {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+
+    let (_, _, pk_a) = sec1_keypair(0x11);
+    let (_, _, pk_b) = sec1_keypair(0x12);
+    let (coord_sk, coord_raw, coord_pk) = sec1_keypair(0x33);
+
+    let part_a = mk_participant(pk_a.clone(), 0xA0);
+    let part_b = mk_participant(pk_b.clone(), 0xB0);
+
+    let params_with = mk_params(part_a.clone(), part_b.clone(), Some(coord_pk.clone()));
+    let params_without = mk_params(part_a, part_b, None);
+
+    // (1) The coordinator field in Params encodes as the eth address derived from
+    // the coordinator's pubkey; absent, it is address(0).
+    let derived = eth_address_from_sec1_pubkey(&coord_raw).expect("derive eth addr");
+    assert_eq!(
+        convert_params(&params_with).coordinator.as_slice(),
+        derived.as_slice(),
+        "coordinator must encode as the derived eth address"
+    );
+    assert_eq!(
+        convert_params(&params_without).coordinator.as_slice(),
+        &[0u8; 20],
+        "no coordinator must encode as address(0)"
+    );
+
+    // (2) Adding the coordinator changes the ABI-encoded params (hence the channel
+    // id keccak256(abi_encode(params))), keeping CKB <-> Ethereum ids consistent.
+    assert_ne!(
+        convert_params(&params_with).abi_encode(),
+        convert_params(&params_without).abi_encode(),
+        "coordinator must affect the channel id encoding"
+    );
+
+    // (3) Multi-ledger detection mirrors MultiLedger.isMultiLedgerState.
+    let multi = ckb_eth_state();
+    let single = ckb_only_state();
+    assert!(is_multi_ledger_state(&multi), "CKB+ETH is multi-ledger");
+    assert!(!is_multi_ledger_state(&single), "CKB-only is single-ledger");
+
+    // (4) Eligibility = coordinator configured AND multi-ledger.
+    assert!(is_coordinated_eligible(&params_with, &multi));
+    assert!(!is_coordinated_eligible(&params_without, &multi));
+    assert!(!is_coordinated_eligible(&params_with, &single));
+
+    // (5) The coordinator signature verifies with the same scheme as participants.
+    let msg_hash = ethereum_message_hash(&convert_ckb_state(&multi).abi_encode());
+    let sig: k256::ecdsa::Signature = coord_sk.sign_prehash(&msg_hash).expect("sign");
+    let sig_bytes: Bytes = sig.to_der().as_bytes().to_vec().into();
+    verify_coordinator_sig(&sig_bytes, &multi, &coord_pk).expect("coordinator sig must verify");
+    assert!(
+        verify_coordinator_sig(&sig_bytes, &multi, &pk_a).is_err(),
+        "a non-coordinator key must not verify"
+    );
+}
+
 mod ckb_keys {
     use crate::perun::Account;
     use crate::perun::TestAccount;
@@ -261,6 +429,9 @@ fn channel_test_bench() -> Result<(), perun::Error> {
         test_dispute_version_regression,
         test_dispute_inflated_balances,
         test_eth_payment_and_force_close,
+        test_coordinate_then_force_close,
+        test_force_close_requires_coordinate,
+        test_coordinate_wrong_coordinator_rejected,
         test_channel_id_matches_ethereum,
     ]
     .iter()
@@ -293,6 +464,9 @@ fn channel_vc_test_bench() -> Result<(), perun::Error> {
         test_vc_happy_multi_asset_with_merge,
         test_vc_happy_multi_asset_eth,
         test_vc_happy_multi_asset_eth_with_merge,
+        test_vc_coordinate_then_close,
+        test_vc_close_requires_coordinate,
+        test_vc_no_coordinator_settles_via_timelock,
     ]
     .iter()
     .map(|test| {
@@ -2956,6 +3130,657 @@ fn test_vc_happy_multi_asset_with_merge(
     )
 }
 
+// A cross-chain (multi-ledger) virtual channel must be moved into the
+// coordinated phase before it can be force-closed. This mirrors Ethereum's
+// `coordinateRecursive`: a single transaction coordinates a parent ledger
+// channel together with its virtual channel, and only afterwards may the funds
+// be force-closed. The flow disputes both parents, registers the canonical VC
+// state, then runs a recursive Coordinate tx per parent (each carrying a
+// coordinator-certified canonical LC and VC state) before closing.
+fn test_vc_coordinate_then_close(
+    context: Rc<Mutex<RefCell<Context>>>,
+    env: &perun::harness::Env,
+) -> Result<(), perun::Error> {
+    let (alice, bob, ingrid) = ("alice", "bob", "ingrid");
+    let alice_acc = random::account(alice);
+    let bob_acc = random::account(bob);
+    let ingrid_acc = random::account(ingrid);
+    let coordinator_acc = random::account("coordinator");
+    // The coordinator key embedded in both ledger-channel and virtual-channel
+    // parameters. The same key certifies the canonical state on every cell.
+    let coordinator_client = perun::test::Client::new(
+        u8::MAX,
+        coordinator_acc.name.clone(),
+        coordinator_acc.sk.clone(),
+    );
+    let coordinator_pubkey = coordinator_client.sec1_pubkey();
+
+    let parts_ai = [alice_acc.clone(), ingrid_acc.clone()];
+    let parts_bi = [bob_acc.clone(), ingrid_acc.clone()];
+    let parts_ab = [alice_acc.clone(), bob_acc.clone()];
+
+    let funding = [
+        Capacity::bytes(100)?.as_u64(),
+        Capacity::bytes(100)?.as_u64(),
+    ];
+    let sudt_funding = [50u128, 50u128];
+    let eth_funding = [100u128, 100u128];
+    let eth_chain_id = eth_funding.iter().cloned().sum::<u128>();
+
+    let funding_vc = [Capacity::bytes(50)?.as_u64(), Capacity::bytes(50)?.as_u64()];
+    let sudt_funding_vc = [20u128, 20u128];
+    let eth_funding_vc = [40u128, 40u128];
+    let eth_chain_id_vc = eth_funding_vc.iter().cloned().sum::<u128>();
+
+    let funding_agreement_ai = test::FundingAgreement::new_with_capacities_and_assets(
+        parts_ai
+            .iter()
+            .cloned()
+            .zip(funding.iter().cloned())
+            .collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts_ai
+            .iter()
+            .cloned()
+            .zip(sudt_funding.iter().cloned())
+            .collect(),
+        eth_chain_id,
+        parts_ai
+            .iter()
+            .cloned()
+            .zip(eth_funding.iter().cloned())
+            .collect(),
+    );
+
+    let funding_agreement_bi = test::FundingAgreement::new_with_capacities_and_assets(
+        parts_bi
+            .iter()
+            .cloned()
+            .zip(funding.iter().cloned())
+            .collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts_bi
+            .iter()
+            .cloned()
+            .zip(sudt_funding.iter().cloned())
+            .collect(),
+        eth_chain_id,
+        parts_bi
+            .iter()
+            .cloned()
+            .zip(eth_funding.iter().cloned())
+            .collect(),
+    );
+
+    let funding_agreement_ab = test::FundingAgreement::new_with_capacities_and_assets(
+        parts_ab
+            .iter()
+            .cloned()
+            .zip(funding_vc.iter().cloned())
+            .collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts_ab
+            .iter()
+            .cloned()
+            .zip(sudt_funding_vc.iter().cloned())
+            .collect(),
+        eth_chain_id_vc,
+        parts_ab
+            .iter()
+            .cloned()
+            .zip(eth_funding_vc.iter().cloned())
+            .collect(),
+    );
+
+    let idx_map = virtual_channel::VCIndexMap {
+        parent1: [0u8, 1u8],
+        parent2: [1u8, 0u8],
+    };
+
+    create_vc_channel_test(
+        context.clone(),
+        env,
+        &parts_ai,
+        &parts_bi,
+        |chan_ai, chan_bi| {
+            println!("TEST_VC_COORDINATE_THEN_CLOSE");
+            chan_ai.with_coordinator(&coordinator_acc);
+            chan_bi.with_coordinator(&coordinator_acc);
+
+            chan_ai
+                .with(alice)
+                .open(&funding_agreement_ai)
+                .expect("opening channel");
+
+            chan_bi
+                .with(bob)
+                .open(&funding_agreement_bi)
+                .expect("opening channel");
+
+            chan_ai
+                .with(ingrid)
+                .fund(&funding_agreement_ai)
+                .expect("funding channel");
+
+            chan_bi
+                .with(ingrid)
+                .fund(&funding_agreement_bi)
+                .expect("funding channel");
+
+            let ctx = match context.try_lock() {
+                Ok(lock) => lock,
+                Err(_) => panic!("Failed to acquire lock on context"),
+            };
+            let owner_participants = funding_agreement_ai.mk_participants(
+                &mut ctx.borrow_mut(),
+                env,
+                env.min_capacity_no_script,
+            );
+            let owner = owner_participants.get(0).unwrap();
+
+            let mut vc_ab = perun::virtual_channel::VirtualChannel::new_with_coordinator(
+                &mut ctx.borrow_mut(),
+                env,
+                &parts_ab,
+                &funding_agreement_ab,
+                &chan_ai,
+                &chan_bi,
+                &idx_map,
+                &random::nonce(),
+                &owner,
+                Some(coordinator_pubkey.clone()),
+            );
+            drop(ctx);
+
+            chan_ai.with(alice).update(update_virtual_channel(
+                &funding_agreement_ab,
+                vc_ab.id().clone(),
+                &idx_map.parent1,
+            ));
+            chan_bi.with(ingrid).update(update_virtual_channel(
+                &funding_agreement_ab,
+                vc_ab.id().clone(),
+                &idx_map.parent2,
+            ));
+
+            chan_ai.with(alice).vc_start(&mut vc_ab).expect("vc_start");
+            chan_bi
+                .with(ingrid)
+                .vc_progress_no_update(&mut vc_ab)
+                .expect("vc_progress_no_update");
+
+            // Update with both SUDT and ETH payments.
+            vc_ab.update(pay_ckbytes(Direction::AtoB, 20));
+            vc_ab.update(pay_sudt(Direction::AtoB, 10, 0));
+            vc_ab.update(pay_eth(Direction::AtoB, 15, 0));
+
+            chan_ai
+                .with(alice)
+                .vc_update_only(&mut vc_ab)
+                .expect("only_vc_update");
+
+            // Both dispute windows expire, then each parent ledger channel is
+            // coordinated together with the shared virtual channel.
+            chan_ai.delay(env.challenge_duration);
+            chan_ai.delay(env.challenge_duration);
+            chan_bi.delay(env.challenge_duration);
+            chan_bi.delay(env.challenge_duration);
+
+            chan_ai
+                .with(alice)
+                .vc_coordinate(&mut vc_ab)
+                .expect("recursive coordinate (parent AI + VC)");
+            chan_bi
+                .with(ingrid)
+                .vc_coordinate(&mut vc_ab)
+                .expect("recursive coordinate (parent BI + VC)");
+
+            let idx_map_parent1 = virtual_channel::IdxMapWithDirection {
+                idx_map: idx_map.clone().invert_map(0 as usize),
+                direction: IdxMapDirection::LedgerChannelToVirtualChannel,
+            };
+            chan_ai
+                .with(alice)
+                .vc_close1(&mut vc_ab, &idx_map_parent1)
+                .expect("vc_close1");
+
+            let idx_map_parent2 = virtual_channel::IdxMapWithDirection {
+                idx_map: idx_map.clone().invert_map(1 as usize),
+                direction: IdxMapDirection::LedgerChannelToVirtualChannel,
+            };
+            chan_bi
+                .with(ingrid)
+                .vc_close2(&mut vc_ab, &idx_map_parent2)
+                .expect("vc_close2");
+
+            chan_ai.assert();
+            chan_bi.assert();
+            Ok(())
+        },
+    )
+}
+
+// A multi-ledger virtual channel that has NOT been coordinated must not be
+// force-closeable: vc_close1 is rejected with CoordinatedSettlementRequired.
+fn test_vc_close_requires_coordinate(
+    context: Rc<Mutex<RefCell<Context>>>,
+    env: &perun::harness::Env,
+) -> Result<(), perun::Error> {
+    let (alice, bob, ingrid) = ("alice", "bob", "ingrid");
+    let alice_acc = random::account(alice);
+    let bob_acc = random::account(bob);
+    let ingrid_acc = random::account(ingrid);
+    let coordinator_acc = random::account("coordinator");
+    let coordinator_client = perun::test::Client::new(
+        u8::MAX,
+        coordinator_acc.name.clone(),
+        coordinator_acc.sk.clone(),
+    );
+    let coordinator_pubkey = coordinator_client.sec1_pubkey();
+
+    let parts_ai = [alice_acc.clone(), ingrid_acc.clone()];
+    let parts_bi = [bob_acc.clone(), ingrid_acc.clone()];
+    let parts_ab = [alice_acc.clone(), bob_acc.clone()];
+
+    let funding = [
+        Capacity::bytes(100)?.as_u64(),
+        Capacity::bytes(100)?.as_u64(),
+    ];
+    let sudt_funding = [50u128, 50u128];
+    let eth_funding = [100u128, 100u128];
+    let eth_chain_id = eth_funding.iter().cloned().sum::<u128>();
+
+    let funding_vc = [Capacity::bytes(50)?.as_u64(), Capacity::bytes(50)?.as_u64()];
+    let sudt_funding_vc = [20u128, 20u128];
+    let eth_funding_vc = [40u128, 40u128];
+    let eth_chain_id_vc = eth_funding_vc.iter().cloned().sum::<u128>();
+
+    let funding_agreement_ai = test::FundingAgreement::new_with_capacities_and_assets(
+        parts_ai
+            .iter()
+            .cloned()
+            .zip(funding.iter().cloned())
+            .collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts_ai
+            .iter()
+            .cloned()
+            .zip(sudt_funding.iter().cloned())
+            .collect(),
+        eth_chain_id,
+        parts_ai
+            .iter()
+            .cloned()
+            .zip(eth_funding.iter().cloned())
+            .collect(),
+    );
+
+    let funding_agreement_bi = test::FundingAgreement::new_with_capacities_and_assets(
+        parts_bi
+            .iter()
+            .cloned()
+            .zip(funding.iter().cloned())
+            .collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts_bi
+            .iter()
+            .cloned()
+            .zip(sudt_funding.iter().cloned())
+            .collect(),
+        eth_chain_id,
+        parts_bi
+            .iter()
+            .cloned()
+            .zip(eth_funding.iter().cloned())
+            .collect(),
+    );
+
+    let funding_agreement_ab = test::FundingAgreement::new_with_capacities_and_assets(
+        parts_ab
+            .iter()
+            .cloned()
+            .zip(funding_vc.iter().cloned())
+            .collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts_ab
+            .iter()
+            .cloned()
+            .zip(sudt_funding_vc.iter().cloned())
+            .collect(),
+        eth_chain_id_vc,
+        parts_ab
+            .iter()
+            .cloned()
+            .zip(eth_funding_vc.iter().cloned())
+            .collect(),
+    );
+
+    let idx_map = virtual_channel::VCIndexMap {
+        parent1: [0u8, 1u8],
+        parent2: [1u8, 0u8],
+    };
+
+    create_vc_channel_test(
+        context.clone(),
+        env,
+        &parts_ai,
+        &parts_bi,
+        |chan_ai, chan_bi| {
+            println!("TEST_VC_CLOSE_REQUIRES_COORDINATE");
+            chan_ai.with_coordinator(&coordinator_acc);
+            chan_bi.with_coordinator(&coordinator_acc);
+
+            chan_ai
+                .with(alice)
+                .open(&funding_agreement_ai)
+                .expect("opening channel");
+            chan_bi
+                .with(bob)
+                .open(&funding_agreement_bi)
+                .expect("opening channel");
+            chan_ai
+                .with(ingrid)
+                .fund(&funding_agreement_ai)
+                .expect("funding channel");
+            chan_bi
+                .with(ingrid)
+                .fund(&funding_agreement_bi)
+                .expect("funding channel");
+
+            let ctx = match context.try_lock() {
+                Ok(lock) => lock,
+                Err(_) => panic!("Failed to acquire lock on context"),
+            };
+            let owner_participants = funding_agreement_ai.mk_participants(
+                &mut ctx.borrow_mut(),
+                env,
+                env.min_capacity_no_script,
+            );
+            let owner = owner_participants.get(0).unwrap();
+
+            let mut vc_ab = perun::virtual_channel::VirtualChannel::new_with_coordinator(
+                &mut ctx.borrow_mut(),
+                env,
+                &parts_ab,
+                &funding_agreement_ab,
+                &chan_ai,
+                &chan_bi,
+                &idx_map,
+                &random::nonce(),
+                &owner,
+                Some(coordinator_pubkey.clone()),
+            );
+            drop(ctx);
+
+            chan_ai.with(alice).update(update_virtual_channel(
+                &funding_agreement_ab,
+                vc_ab.id().clone(),
+                &idx_map.parent1,
+            ));
+            chan_bi.with(ingrid).update(update_virtual_channel(
+                &funding_agreement_ab,
+                vc_ab.id().clone(),
+                &idx_map.parent2,
+            ));
+
+            chan_ai.with(alice).vc_start(&mut vc_ab).expect("vc_start");
+            chan_bi
+                .with(ingrid)
+                .vc_progress_no_update(&mut vc_ab)
+                .expect("vc_progress_no_update");
+
+            chan_ai.delay(env.challenge_duration);
+            chan_ai.delay(env.challenge_duration);
+
+            // No coordinate has been performed, so closing the multi-ledger
+            // virtual channel must be rejected.
+            let idx_map_parent1 = virtual_channel::IdxMapWithDirection {
+                idx_map: idx_map.clone().invert_map(0 as usize),
+                direction: IdxMapDirection::LedgerChannelToVirtualChannel,
+            };
+            chan_ai.with(alice).invalid();
+            chan_ai
+                .with(alice)
+                .vc_close1(&mut vc_ab, &idx_map_parent1)
+                .expect("vc_close1 without coordinate must be rejected");
+
+            chan_ai.assert();
+            Ok(())
+        },
+    )
+}
+
+// vc_eth_funding_agreements builds the (AI, BI, AB) cross-asset (CKB+SUDT+ETH)
+// funding agreements shared by the multi-asset virtual-channel tests: the two
+// parent ledger channels (AI, BI) and the virtual channel (AB).
+fn vc_eth_funding_agreements(
+    env: &perun::harness::Env,
+    parts_ai: &[perun::TestAccount],
+    parts_bi: &[perun::TestAccount],
+    parts_ab: &[perun::TestAccount],
+) -> Result<
+    (
+        test::FundingAgreement,
+        test::FundingAgreement,
+        test::FundingAgreement,
+    ),
+    perun::Error,
+> {
+    let funding = [
+        Capacity::bytes(100)?.as_u64(),
+        Capacity::bytes(100)?.as_u64(),
+    ];
+    let sudt_funding = [50u128, 50u128];
+    let eth_funding = [100u128, 100u128];
+    let eth_chain_id = eth_funding.iter().cloned().sum::<u128>();
+
+    let funding_vc = [Capacity::bytes(50)?.as_u64(), Capacity::bytes(50)?.as_u64()];
+    let sudt_funding_vc = [20u128, 20u128];
+    let eth_funding_vc = [40u128, 40u128];
+    let eth_chain_id_vc = eth_funding_vc.iter().cloned().sum::<u128>();
+
+    let mk = |parts: &[perun::TestAccount],
+              cap: &[u64; 2],
+              sudt: &[u128; 2],
+              eth_cid: u128,
+              eth: &[u128; 2]| {
+        test::FundingAgreement::new_with_capacities_and_assets(
+            parts.iter().cloned().zip(cap.iter().cloned()).collect(),
+            &env.sample_udt_script,
+            env.sample_udt_max_cap.as_u64(),
+            parts.iter().cloned().zip(sudt.iter().cloned()).collect(),
+            eth_cid,
+            parts.iter().cloned().zip(eth.iter().cloned()).collect(),
+        )
+    };
+
+    Ok((
+        mk(
+            parts_ai,
+            &funding,
+            &sudt_funding,
+            eth_chain_id,
+            &eth_funding,
+        ),
+        mk(
+            parts_bi,
+            &funding,
+            &sudt_funding,
+            eth_chain_id,
+            &eth_funding,
+        ),
+        mk(
+            parts_ab,
+            &funding_vc,
+            &sudt_funding_vc,
+            eth_chain_id_vc,
+            &eth_funding_vc,
+        ),
+    ))
+}
+
+// A virtual channel that carries NO coordinator must still be settleable when it
+// is nested inside a coordinated cross-chain ledger channel: the ledger channels
+// are coordinated (LC-only, the VC is not bundled), and the VC is force-closed
+// via its own refutation-window time lock. This exercises the decoupled
+// force-close gate (LC leg coordinated, VC leg time-locked).
+fn test_vc_no_coordinator_settles_via_timelock(
+    context: Rc<Mutex<RefCell<Context>>>,
+    env: &perun::harness::Env,
+) -> Result<(), perun::Error> {
+    let (alice, bob, ingrid) = ("alice", "bob", "ingrid");
+    let alice_acc = random::account(alice);
+    let bob_acc = random::account(bob);
+    let ingrid_acc = random::account(ingrid);
+    let coordinator_acc = random::account("coordinator");
+
+    let parts_ai = [alice_acc.clone(), ingrid_acc.clone()];
+    let parts_bi = [bob_acc.clone(), ingrid_acc.clone()];
+    let parts_ab = [alice_acc.clone(), bob_acc.clone()];
+
+    let (funding_agreement_ai, funding_agreement_bi, funding_agreement_ab) =
+        vc_eth_funding_agreements(env, &parts_ai, &parts_bi, &parts_ab)?;
+
+    let idx_map = virtual_channel::VCIndexMap {
+        parent1: [0u8, 1u8],
+        parent2: [1u8, 0u8],
+    };
+
+    create_vc_channel_test(
+        context.clone(),
+        env,
+        &parts_ai,
+        &parts_bi,
+        |chan_ai, chan_bi| {
+            println!("TEST_VC_NO_COORDINATOR_SETTLES_VIA_TIMELOCK");
+            // The parent ledger channels are coordinated (cross-chain), but the
+            // virtual channel itself carries no coordinator.
+            chan_ai.with_coordinator(&coordinator_acc);
+            chan_bi.with_coordinator(&coordinator_acc);
+
+            chan_ai
+                .with(alice)
+                .open(&funding_agreement_ai)
+                .expect("opening channel");
+            chan_bi
+                .with(bob)
+                .open(&funding_agreement_bi)
+                .expect("opening channel");
+            chan_ai
+                .with(ingrid)
+                .fund(&funding_agreement_ai)
+                .expect("funding channel");
+            chan_bi
+                .with(ingrid)
+                .fund(&funding_agreement_bi)
+                .expect("funding channel");
+
+            let ctx = match context.try_lock() {
+                Ok(lock) => lock,
+                Err(_) => panic!("Failed to acquire lock on context"),
+            };
+            let owner_participants = funding_agreement_ai.mk_participants(
+                &mut ctx.borrow_mut(),
+                env,
+                env.min_capacity_no_script,
+            );
+            let owner = owner_participants.get(0).unwrap();
+
+            // VirtualChannel::new (not new_with_coordinator) → the VC has no
+            // coordinator configured.
+            let mut vc_ab = perun::virtual_channel::VirtualChannel::new(
+                &mut ctx.borrow_mut(),
+                env,
+                &parts_ab,
+                &funding_agreement_ab,
+                &chan_ai,
+                &chan_bi,
+                &idx_map,
+                &random::nonce(),
+                &owner,
+            );
+            drop(ctx);
+
+            chan_ai.with(alice).update(update_virtual_channel(
+                &funding_agreement_ab,
+                vc_ab.id().clone(),
+                &idx_map.parent1,
+            ));
+            chan_bi.with(ingrid).update(update_virtual_channel(
+                &funding_agreement_ab,
+                vc_ab.id().clone(),
+                &idx_map.parent2,
+            ));
+
+            chan_ai.with(alice).vc_start(&mut vc_ab).expect("vc_start");
+            chan_bi
+                .with(ingrid)
+                .vc_progress_no_update(&mut vc_ab)
+                .expect("vc_progress_no_update");
+
+            vc_ab.update(pay_ckbytes(Direction::AtoB, 20));
+            vc_ab.update(pay_sudt(Direction::AtoB, 10, 0));
+            vc_ab.update(pay_eth(Direction::AtoB, 15, 0));
+
+            chan_ai
+                .with(alice)
+                .vc_update_only(&mut vc_ab)
+                .expect("only_vc_update");
+
+            // Coordinate each parent ledger channel on its own (the VC is NOT
+            // bundled, because a VC without a coordinator cannot be coordinated).
+            chan_ai.delay(env.challenge_duration);
+            chan_ai.delay(env.challenge_duration);
+            chan_bi.delay(env.challenge_duration);
+            chan_bi.delay(env.challenge_duration);
+
+            chan_ai
+                .with(alice)
+                .coordinate()
+                .expect("coordinate parent AI (ledger channel only)");
+            chan_bi
+                .with(ingrid)
+                .coordinate()
+                .expect("coordinate parent BI (ledger channel only)");
+
+            // The virtual channel's own refutation window must elapse before it
+            // can be force-closed via the time-lock path.
+            chan_ai.delay(env.challenge_duration);
+            chan_ai.delay(env.challenge_duration);
+            chan_bi.delay(env.challenge_duration);
+            chan_bi.delay(env.challenge_duration);
+
+            let idx_map_parent1 = virtual_channel::IdxMapWithDirection {
+                idx_map: idx_map.clone().invert_map(0 as usize),
+                direction: IdxMapDirection::LedgerChannelToVirtualChannel,
+            };
+            chan_ai
+                .with(alice)
+                .vc_close1(&mut vc_ab, &idx_map_parent1)
+                .expect("vc_close1 (vc settled via time lock)");
+
+            let idx_map_parent2 = virtual_channel::IdxMapWithDirection {
+                idx_map: idx_map.clone().invert_map(1 as usize),
+                direction: IdxMapDirection::LedgerChannelToVirtualChannel,
+            };
+            chan_bi
+                .with(ingrid)
+                .vc_close2(&mut vc_ab, &idx_map_parent2)
+                .expect("vc_close2 (vc settled via time lock)");
+
+            chan_ai.assert();
+            chan_bi.assert();
+            Ok(())
+        },
+    )
+}
+
 fn test_vc_happy_multi_asset_eth(
     context: Rc<Mutex<RefCell<Context>>>,
     env: &perun::harness::Env,
@@ -3585,6 +4410,152 @@ fn test_eth_payment_and_force_close(
             .expect("force close after ETH payment");
 
         chan.assert();
+        Ok(())
+    })
+}
+
+// Builds a multi-ledger (CKB + UDT + ETH) funding agreement used by the
+// coordinated-settlement tests.
+fn coordinated_funding_agreement(
+    env: &perun::harness::Env,
+    parts: &[perun::TestAccount],
+) -> Result<test::FundingAgreement, perun::Error> {
+    let funding = [
+        Capacity::bytes(100)?.as_u64(),
+        Capacity::bytes(100)?.as_u64(),
+    ];
+    let asset_funding = [20u128, 30u128];
+    let eth_funding = [50u128, 50u128];
+    let eth_chain_id = eth_funding.iter().cloned().sum::<u128>();
+    Ok(test::FundingAgreement::new_with_capacities_and_assets(
+        parts.iter().cloned().zip(funding.iter().cloned()).collect(),
+        &env.sample_udt_script,
+        env.sample_udt_max_cap.as_u64(),
+        parts
+            .iter()
+            .cloned()
+            .zip(asset_funding.iter().cloned())
+            .collect(),
+        eth_chain_id,
+        parts
+            .iter()
+            .cloned()
+            .zip(eth_funding.iter().cloned())
+            .collect(),
+    ))
+}
+
+// Happy path: a coordinated multi-ledger channel can be force-closed after the
+// coordinator has certified the canonical state.
+fn test_coordinate_then_force_close(
+    context: Rc<Mutex<RefCell<Context>>>,
+    env: &perun::harness::Env,
+) -> Result<(), perun::Error> {
+    let (alice, bob) = ("alice", "bob");
+    let parts = [random::account(alice), random::account(bob)];
+    let coordinator = random::account("coordinator");
+    let funding_agreement = coordinated_funding_agreement(env, &parts)?;
+
+    create_channel_test(context, env, &parts, |chan| {
+        chan.with_coordinator(&coordinator);
+        chan.with(alice)
+            .open(&funding_agreement)
+            .expect("opening channel");
+        chan.with(bob)
+            .fund(&funding_agreement)
+            .expect("funding channel");
+
+        chan.with(alice)
+            .update(pay_eth(Direction::AtoB, 20, 0))
+            .dispute()
+            .expect("dispute after ETH payment");
+
+        chan.delay(env.challenge_duration);
+
+        chan.with(alice)
+            .coordinate()
+            .expect("coordinate the multi-ledger channel");
+
+        chan.with(alice)
+            .force_close()
+            .expect("force close after coordination");
+
+        chan.assert();
+        Ok(())
+    })
+}
+
+// A multi-ledger channel with a coordinator must NOT be force-closable until it
+// has been coordinated (mirrors Ethereum's "coordinated settlement required").
+fn test_force_close_requires_coordinate(
+    context: Rc<Mutex<RefCell<Context>>>,
+    env: &perun::harness::Env,
+) -> Result<(), perun::Error> {
+    let (alice, bob) = ("alice", "bob");
+    let parts = [random::account(alice), random::account(bob)];
+    let coordinator = random::account("coordinator");
+    let funding_agreement = coordinated_funding_agreement(env, &parts)?;
+
+    create_channel_test(context, env, &parts, |chan| {
+        chan.with_coordinator(&coordinator);
+        chan.with(alice)
+            .open(&funding_agreement)
+            .expect("opening channel");
+        chan.with(bob)
+            .fund(&funding_agreement)
+            .expect("funding channel");
+
+        chan.with(alice)
+            .update(pay_eth(Direction::AtoB, 20, 0))
+            .dispute()
+            .expect("dispute after ETH payment");
+
+        chan.delay(env.challenge_duration);
+
+        // Skipping coordination, the force close must be rejected.
+        chan.with(alice)
+            .invalid()
+            .force_close()
+            .expect("force close without coordination must be rejected");
+
+        Ok(())
+    })
+}
+
+// A coordinate transaction signed by a key other than the channel's configured
+// coordinator must be rejected.
+fn test_coordinate_wrong_coordinator_rejected(
+    context: Rc<Mutex<RefCell<Context>>>,
+    env: &perun::harness::Env,
+) -> Result<(), perun::Error> {
+    let (alice, bob) = ("alice", "bob");
+    let parts = [random::account(alice), random::account(bob)];
+    let coordinator = random::account("coordinator");
+    let mallory = random::account("mallory");
+    let funding_agreement = coordinated_funding_agreement(env, &parts)?;
+
+    create_channel_test(context, env, &parts, |chan| {
+        chan.with_coordinator(&coordinator);
+        chan.with(alice)
+            .open(&funding_agreement)
+            .expect("opening channel");
+        chan.with(bob)
+            .fund(&funding_agreement)
+            .expect("funding channel");
+
+        chan.with(alice)
+            .update(pay_eth(Direction::AtoB, 20, 0))
+            .dispute()
+            .expect("dispute after ETH payment");
+
+        chan.delay(env.challenge_duration);
+
+        // A coordinator signature from the wrong key must be rejected.
+        let wrong = perun::test::Client::new(u8::MAX, mallory.name.clone(), mallory.sk.clone());
+        chan.with(alice).invalid();
+        chan.coordinate_with_coordinator(&wrong)
+            .expect("coordinate with wrong coordinator key must be rejected");
+
         Ok(())
     })
 }

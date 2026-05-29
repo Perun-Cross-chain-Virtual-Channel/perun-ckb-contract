@@ -9,7 +9,10 @@ use k256::ecdsa::signature::hazmat::PrehashSigner;
 use perun_common::*;
 use sha3::{Digest, Keccak256};
 
-use perun_common::perun_types::{ChannelState, ChannelStatus, VirtualChannelStatus};
+use ckb_testtool::ckb_types::packed::Byte;
+use perun_common::perun_types::{
+    ChannelState, ChannelStatus, Coordinator, SEC1EncodedPubKey, VirtualChannelStatus,
+};
 
 use crate::perun;
 use crate::perun::harness;
@@ -56,6 +59,19 @@ impl Client {
         keys::verifying_key_to_byte_array(&self.signing_key.verifying_key())
     }
 
+    // sec1_pubkey returns the client's public key as a molecule SEC1EncodedPubKey,
+    // used e.g. to embed a coordinator's identity in the channel parameters.
+    pub fn sec1_pubkey(&self) -> SEC1EncodedPubKey {
+        let bytes: [Byte; 33] = self
+            .pubkey()
+            .iter()
+            .map(|b| Byte::from(*b))
+            .collect::<Vec<Byte>>()
+            .try_into()
+            .expect("33-byte sec1 pubkey");
+        SEC1EncodedPubKey::new_builder().set(bytes).build()
+    }
+
     pub fn name(&self) -> String {
         self.name.clone()
     }
@@ -65,6 +81,7 @@ impl Client {
         ctx: &mut Context,
         env: &harness::Env,
         funding_agreement: &test::FundingAgreement,
+        coordinator: Option<SEC1EncodedPubKey>,
     ) -> Result<(ChannelId, OpenResult), perun::Error> {
         // Prepare environment so that this party has the required funds.
         let inputs = env.create_funds_from_agreement(ctx, self.index, funding_agreement)?;
@@ -96,6 +113,7 @@ impl Client {
             .app(Default::default())
             .is_ledger_channel(ctrue!())
             .is_virtual_channel(cfalse!())
+            .coordinator(Coordinator::new_builder().set(coordinator).build())
             .build();
         let params_sol = perun_common::sol::convert_params(&chan_params);
         let cid_raw_sol = params_sol.abi_encode();
@@ -208,6 +226,70 @@ impl Client {
         let cycles = ctx.verify_tx(&dr.tx, env.max_cycles)?;
         println!("consumed cycles: {}", cycles);
         Ok(dr)
+    }
+
+    pub fn coordinate(
+        &self,
+        ctx: &mut Context,
+        env: &harness::Env,
+        channel_cell: OutPoint,
+        channel_state: ChannelStatus,
+        pcts: Script,
+        sigs: [Vec<u8>; 2],
+        coord_sig: Vec<u8>,
+    ) -> Result<transaction::CoordinateResult, perun::Error> {
+        let cr = transaction::mk_coordinate(
+            ctx,
+            env,
+            transaction::CoordinateArgs {
+                channel_cell,
+                state: channel_state,
+                party_index: self.index,
+                pcts_script: pcts,
+                sigs,
+                coord_sig,
+            },
+        )?;
+        let cycles = ctx.verify_tx(&cr.tx, env.max_cycles)?;
+        println!("consumed cycles: {}", cycles);
+        Ok(cr)
+    }
+
+    pub fn vc_coordinate(
+        &self,
+        ctx: &mut Context,
+        env: &harness::Env,
+        channel_cell: OutPoint,
+        vc_cell: OutPoint,
+        lc_status: ChannelStatus,
+        vc_status: VirtualChannelStatus,
+        pcts: Script,
+        vcts: Script,
+        lc_sigs: [Vec<u8>; 2],
+        lc_coord_sig: Vec<u8>,
+        vc_sigs: [Vec<u8>; 2],
+        vc_coord_sig: Vec<u8>,
+    ) -> Result<transaction::VCCoordinateResult, perun::Error> {
+        let cr = transaction::mk_vc_coordinate(
+            ctx,
+            env,
+            transaction::VCCoordinateArgs {
+                channel_cell,
+                vc_cell,
+                lc_status,
+                vc_status,
+                lc_sigs,
+                lc_coord_sig,
+                vc_sigs,
+                vc_coord_sig,
+                pcts_script: pcts,
+                vcts_script: vcts,
+                party_index: self.index,
+            },
+        )?;
+        let cycles = ctx.verify_tx(&cr.tx, env.max_cycles)?;
+        println!("consumed cycles: {}", cycles);
+        Ok(cr)
     }
 
     pub fn vc_start(

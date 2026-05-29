@@ -16,6 +16,9 @@ pub use force_close::*;
 mod dispute;
 pub use dispute::*;
 
+mod coordinate;
+pub use coordinate::*;
+
 mod vc_start;
 pub use vc_start::*;
 

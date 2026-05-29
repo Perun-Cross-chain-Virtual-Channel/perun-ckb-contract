@@ -9,8 +9,8 @@ use k256::ecdsa::VerifyingKey;
 use perun_common::{
     cfalse, ctrue,
     perun_types::{
-        ChannelParametersBuilder, ChannelState, IndexMapBuilder, ParentDataBuilder,
-        ParentsVecBuilder, Participant, SUDTAllocation, VCChannelConstants,
+        ChannelParametersBuilder, ChannelState, Coordinator, IndexMapBuilder, ParentDataBuilder,
+        ParentsVecBuilder, Participant, SEC1EncodedPubKey, SUDTAllocation, VCChannelConstants,
         VCChannelConstantsBuilder, VirtualChannelStatus,
     },
     sol::convert_params,
@@ -89,6 +89,37 @@ impl VirtualChannel {
         nonce: &[u8; 32],
         owner: &Participant,
     ) -> Self {
+        Self::new_with_coordinator(
+            context,
+            env,
+            parts,
+            funding_agreement,
+            chan_ai,
+            chan_bi,
+            idx_map,
+            nonce,
+            owner,
+            None,
+        )
+    }
+
+    /// new_with_coordinator builds a virtual channel whose parameters embed an
+    /// (optional) coordinator public key. A coordinator is required for the
+    /// cross-chain coordinated-settlement protocol: a multi-ledger virtual
+    /// channel can only be force-closed after it has been moved into the
+    /// coordinated phase. Passing `None` is equivalent to `new`.
+    pub fn new_with_coordinator(
+        context: &mut Context,
+        env: &perun::harness::Env,
+        parts: &[perun::TestAccount],
+        funding_agreement: &FundingAgreement,
+        chan_ai: &Channel<perun::State>,
+        chan_bi: &Channel<perun::State>,
+        idx_map: &VCIndexMap,
+        nonce: &[u8; 32],
+        owner: &Participant,
+        coordinator: Option<SEC1EncodedPubKey>,
+    ) -> Self {
         let m_parts: HashMap<_, _> = parts
             .iter()
             .enumerate()
@@ -109,6 +140,7 @@ impl VirtualChannel {
             .app(Default::default())
             .is_ledger_channel(cfalse!())
             .is_virtual_channel(ctrue!())
+            .coordinator(Coordinator::new_builder().set(coordinator).build())
             .build();
         // VC channel ID = Keccak256(abi_encode(convert_vc_params(params))),
         // matching the on-chain check in verify_vchannel_id_integrity.
@@ -191,6 +223,10 @@ impl VirtualChannel {
     }
     pub fn set_cell(&mut self, cell: OutPoint) {
         self.cell = cell;
+    }
+
+    pub fn set_vc_status(&mut self, vc_status: VirtualChannelStatus) {
+        self.vc_status = vc_status;
     }
 
     pub fn update(

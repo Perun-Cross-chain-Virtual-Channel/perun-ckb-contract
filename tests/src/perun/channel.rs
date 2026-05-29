@@ -71,6 +71,10 @@ where
     history: Vec<perun::Action<S>>,
     /// The currently tracked channel state as produced by the unit under test.
     current_state: S,
+    /// The optional coordinator for cross-chain (multi-ledger) coordinated
+    /// settlement. When set, it is embedded in the channel parameters at open
+    /// time and used to certify the canonical state in `coordinate`.
+    coordinator: Option<test::Client>,
 }
 
 /// call_action! is a macro that calls the given action on the currently active
@@ -134,12 +138,27 @@ where
             validity: ActionValidity::Valid,
             history: Vec::new(),
             current_state: S::default(),
+            coordinator: None,
         }
     }
 
     /// with sets the currently active participant to the given `part`.
     pub fn with(&mut self, part: &str) -> &mut Self {
         self.active_part = self.parts.get(part).expect("part not found").clone();
+        self
+    }
+
+    /// with_coordinator configures a cross-chain coordinator for this channel.
+    /// It must be called before `open` so the coordinator's public key is part of
+    /// the channel parameters (and therefore the channel id). The coordinator is a
+    /// standalone party identified by its own key, not one of the channel
+    /// participants.
+    pub fn with_coordinator(&mut self, coordinator: &perun::TestAccount) -> &mut Self {
+        self.coordinator = Some(perun::test::Client::new(
+            u8::MAX,
+            coordinator.name(),
+            coordinator.sk.clone(),
+        ));
         self
     }
 
@@ -158,7 +177,8 @@ where
     /// open a channel using the currently active participant set by `with(..)`
     /// with the value given in `funding_agreement`.
     pub fn open(&mut self, funding_agreement: &test::FundingAgreement) -> Result<(), perun::Error> {
-        let (id, or) = call_action!(self, open, funding_agreement)?;
+        let coordinator_pubkey = self.coordinator.as_ref().map(|c| c.sec1_pubkey());
+        let (id, or) = call_action!(self, open, funding_agreement, coordinator_pubkey)?;
         self.id = id;
         self.channel_cell = Some(or.channel_cell.clone());
         // Make sure the channel cell is linked to a header with a timestamp.
@@ -289,6 +309,157 @@ where
         }?;
         self.channel_cell = Some(res.channel_cell.clone());
         self.push_header_with_cell(res.channel_cell);
+        Ok(())
+    }
+
+    /// coordinate moves a disputed multi-ledger channel into the coordinated
+    /// phase using the configured coordinator (set via `with_coordinator`). The
+    /// canonical state is the current channel state; the coordinator certifies it
+    /// with its signature alongside both participants' signatures.
+    pub fn coordinate(&mut self) -> Result<(), perun::Error> {
+        let coordinator = self
+            .coordinator
+            .clone()
+            .expect("coordinate requires a coordinator (call with_coordinator before open)");
+        self.coordinate_with_coordinator(&coordinator)
+    }
+
+    /// coordinate_with_coordinator is like `coordinate` but signs the coordinator
+    /// certificate with the given party. Passing a key other than the one embedded
+    /// in the channel parameters is used to test rejection of an invalid
+    /// coordinator signature.
+    pub fn coordinate_with_coordinator(
+        &mut self,
+        coordinator: &test::Client,
+    ) -> Result<(), perun::Error> {
+        // The coordinated phase may only be entered after the dispute window has
+        // passed, so push a header at the current (delayed) time which the contract
+        // uses for the time-lock check.
+        let h = Header::new_builder()
+            .raw(
+                RawHeader::new_builder()
+                    .timestamp(self.current_time.pack())
+                    .build(),
+            )
+            .build()
+            .into_view();
+        let ctx = self.ctx.lock().unwrap();
+        ctx.borrow_mut().insert_header(h.clone());
+        drop(ctx);
+
+        // The coordinated flag is set on the status; the canonical state itself is
+        // unchanged, so participant and coordinator signatures cover the same bytes.
+        let new_status = self
+            .channel_state
+            .clone()
+            .as_builder()
+            .coordinated(ctrue!())
+            .build();
+        let sigs = self.sigs_for_channel_state()?;
+        let coord_sig = coordinator.sign(self.channel_state.state())?;
+        let res = match &self.channel_cell {
+            Some(channel_cell) => {
+                call_action!(
+                    self,
+                    coordinate,
+                    channel_cell.clone(),
+                    new_status.clone(),
+                    self.pcts.clone(),
+                    sigs,
+                    coord_sig,
+                )
+            }
+            None => panic!("no channel cell, invalid test setup"),
+        }?;
+        self.channel_state = new_status;
+        self.channel_cell = Some(res.channel_cell.clone());
+        self.push_header_with_cell(res.channel_cell);
+        Ok(())
+    }
+
+    /// vc_coordinate performs a recursive coordinate transaction that moves this
+    /// parent ledger channel and its shared virtual channel into the coordinated
+    /// phase together (mirroring Ethereum's `coordinateRecursive`). Both cells
+    /// continue on-chain with `coordinated` set; the configured coordinator
+    /// certifies the canonical ledger-channel state and the canonical
+    /// virtual-channel state. The parent must already be disputed (vc_disputed)
+    /// and the dispute window expired.
+    pub fn vc_coordinate(&mut self, vc: &mut VirtualChannel) -> Result<(), perun::Error> {
+        let coordinator = self
+            .coordinator
+            .clone()
+            .expect("vc_coordinate requires a coordinator (call with_coordinator before open)");
+        self.vc_coordinate_with_coordinator(vc, &coordinator)
+    }
+
+    /// vc_coordinate_with_coordinator is like `vc_coordinate` but signs both
+    /// coordinator certificates with the given party. Passing a key other than
+    /// the one embedded in the channel parameters tests rejection of an invalid
+    /// coordinator signature.
+    pub fn vc_coordinate_with_coordinator(
+        &mut self,
+        vc: &mut VirtualChannel,
+        coordinator: &test::Client,
+    ) -> Result<(), perun::Error> {
+        // The coordinated phase may only be entered after the dispute window has
+        // passed, so push a header at the current (delayed) time for the
+        // contract's time-lock check.
+        let h = Header::new_builder()
+            .raw(
+                RawHeader::new_builder()
+                    .timestamp(self.current_time.pack())
+                    .build(),
+            )
+            .build()
+            .into_view();
+        let ctx = self.ctx.lock().unwrap();
+        ctx.borrow_mut().insert_header(h.clone());
+        drop(ctx);
+
+        // Both cells only flip the coordinated flag; the canonical states are
+        // unchanged, so participant and coordinator signatures cover the same
+        // bytes the cells already carry.
+        let new_lc_status = self
+            .channel_state
+            .clone()
+            .as_builder()
+            .coordinated(ctrue!())
+            .build();
+        let new_vc_status = vc
+            .vc_status()
+            .clone()
+            .as_builder()
+            .coordinated(ctrue!())
+            .build();
+
+        let lc_sigs = self.sigs_for_channel_state()?;
+        let lc_coord_sig = coordinator.sign(self.channel_state.state())?;
+        let vc_sigs = vc.sigs_for_vc_status()?;
+        let vc_coord_sig = coordinator.sign(vc.vc_status().vcstate())?;
+
+        let result = match &self.channel_cell {
+            Some(channel_cell) => call_action!(
+                self,
+                vc_coordinate,
+                channel_cell.clone(),
+                vc.cell().clone(),
+                new_lc_status.clone(),
+                new_vc_status.clone(),
+                self.pcts.clone(),
+                vc.vcts().clone(),
+                lc_sigs,
+                lc_coord_sig,
+                vc_sigs,
+                vc_coord_sig,
+            ),
+            None => panic!("no channel cell, invalid test setup"),
+        }?;
+        self.channel_state = new_lc_status;
+        self.channel_cell = Some(result.channel_cell.clone());
+        vc.set_cell(result.vc_cell.clone());
+        vc.set_vc_status(new_vc_status);
+        self.push_header_with_cell(result.channel_cell);
+        self.push_header_with_cell(result.vc_cell);
         Ok(())
     }
 

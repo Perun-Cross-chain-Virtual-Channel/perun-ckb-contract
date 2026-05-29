@@ -412,6 +412,7 @@ impl Env {
             .funded(cfalse!())
             .disputed(cfalse!())
             .vc_disputed(cfalse!())
+            .coordinated(cfalse!())
             .build();
         Ok(channel_status)
     }
@@ -446,6 +447,7 @@ impl Env {
             .parents(parents.clone())
             .first_force_close(flag)
             .owner(owner)
+            .coordinated(cfalse!())
             .build();
         Ok(vc_status)
     }
