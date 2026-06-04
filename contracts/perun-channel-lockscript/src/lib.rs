@@ -12,10 +12,14 @@ use ckb_std::{
     ckb_constants::Source,
     ckb_types::{bytes::Bytes, prelude::*},
     debug,
-    high_level::{load_cell_lock_hash, load_cell_type, load_script},
+    high_level::{load_cell_lock_hash, load_cell_type, load_script, load_witness_args},
     syscalls::SysError,
 };
-use perun_common::{error::Error, perun_types::ChannelConstants};
+use perun_common::{
+    channels::is_coordinator_configured,
+    error::Error,
+    perun_types::{ChannelConstants, ChannelWitness, ChannelWitnessUnion},
+};
 
 // The perun-channel-lockscript (pcls) is used to lock access to interacting with a channel and is attached as lock script
 // to the channel-cell (the cell which uses the perun-channel-type-script (pcts) as its type script).
@@ -27,6 +31,15 @@ use perun_common::{error::Error, perun_types::ChannelConstants};
 //
 // Note: This means, that each participant needs to use a secp256k1_blake160_sighash_all as input to interact with the channel.
 // This should not be a substantial restriction, since a payment input will likely be used anyway (e.g. for funding or fees).
+//
+// Coordinated settlement: when the channel has a coordinator configured (params.coordinator is set),
+// the coordinator is an off-channel third party that drives the `coordinate` action. Its input cell is
+// locked by neither participant's unlock_script_hash, so the participant check above does not match it.
+// To let the coordinator submit the Coordinate transaction itself (funding it from its own cell), the
+// pcls additionally accepts a transaction whose channel input carries a Coordinate redeemer, but only
+// for channels that actually have a coordinator configured. This is safe because the pcts verifies the
+// coordinator's signature on the canonical state in the same transaction, so a forged coordinate that
+// lacks the real coordinator (and participant) signatures can never pass the pcts.
 
 pub fn program_entry() -> i8 {
     match main() {
@@ -60,18 +73,53 @@ pub fn main() -> Result<(), Error> {
 
         let constants = ChannelConstants::from_slice(&type_script_args)
             .expect("unable to parse args as channel parameters");
+        let params = constants.params();
 
         let is_participant = verify_is_participant(
-            &constants.params().party_a().unlock_script_hash().unpack(),
-            &constants.params().party_b().unlock_script_hash().unpack(),
+            &params.party_a().unlock_script_hash().unpack(),
+            &params.party_b().unlock_script_hash().unpack(),
         )?;
 
-        if !is_participant {
-            return Err(Error::NotParticipant);
+        if is_participant {
+            continue;
         }
+
+        // The transaction is not authorized by a participant. If the channel has a
+        // coordinator configured, the coordinator may still interact with the channel
+        // cell to carry out a Coordinate action (it funds the transaction from its own
+        // cell, which matches neither participant). We accept this only when the channel
+        // input's witness is a Coordinate redeemer; the pcts validates the coordinator's
+        // signature on the canonical state in the same transaction.
+        if is_coordinator_configured(&params) && witness_is_coordinate(i) {
+            debug!("coordinator-authorized Coordinate transaction accepted");
+            continue;
+        }
+
+        return Err(Error::NotParticipant);
     }
 
     return Ok(());
+}
+
+/// witness_is_coordinate reports whether the channel input at the given group input
+/// index carries a Coordinate redeemer in its witness `input_type` field. A missing
+/// or malformed witness is treated as "not a coordinate" (returns false), so the
+/// caller falls back to requiring a participant input.
+fn witness_is_coordinate(group_input_index: usize) -> bool {
+    let witness_args = match load_witness_args(group_input_index, Source::GroupInput) {
+        Ok(witness_args) => witness_args,
+        Err(_) => return false,
+    };
+    let witness_bytes: Bytes = match witness_args.input_type().to_opt() {
+        Some(input_type) => input_type.unpack(),
+        None => return false,
+    };
+    match ChannelWitness::from_slice(&witness_bytes) {
+        Ok(channel_witness) => {
+            matches!(channel_witness.to_enum(), ChannelWitnessUnion::Coordinate(_))
+        }
+        Err(_) => false,
+    }
 }
 
 /// check_is_participant checks if the current transaction is executed by a channel participant.
